@@ -14,7 +14,7 @@ export interface HttpRequest {
 
 export async function requestJson(input: HttpRequest): Promise<HttpResponse> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 10_000);
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs ?? 20_000);
   try {
     const response = await fetch(input.url, {
       method: input.method,

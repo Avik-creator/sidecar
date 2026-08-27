@@ -24,14 +24,14 @@ import {
 } from "./parse.js";
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const LIVE_CACHE_VERSION = 2;
 const REFRESH_SKEW_MS = 60_000;
 const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
-const LIVE_NOTE =
-  "Live plan windows come from unofficial provider APIs and can change without notice. Sidecar never writes your agent credentials.";
+const LIVE_NOTE = "Sidecar never writes your agent credentials.";
 
-export interface LiveUsageDeps {
+interface LiveUsageDeps {
   now: () => number;
   request: (input: HttpRequest) => Promise<HttpResponse>;
   readClaude: () => OAuthTokens | null;
@@ -566,7 +566,6 @@ function rateLimited(
       ...previous,
       status: "rate_limited",
       error: "Provider rate limited the usage API",
-      unofficial: true,
     };
   }
   return emptySnapshot(provider, "rate_limited", "Provider rate limited the usage API");
@@ -578,7 +577,6 @@ function failed(provider: Harness, previous: LiveUsageSnapshot | undefined, erro
       ...previous,
       status: "stale",
       error,
-      unofficial: true,
     };
   }
   return emptySnapshot(provider, "unavailable", error);
@@ -590,7 +588,12 @@ function shortError(response: HttpResponse): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) {
+    return error.name === "AbortError" || error.name === "TimeoutError"
+      ? "Usage request timed out"
+      : error.message;
+  }
+  return String(error);
 }
 
 function finiteCount(value: unknown): number | null {
@@ -624,7 +627,7 @@ function persistSnapshots(snapshots: LiveUsageSnapshot[]): void {
   fs.mkdirSync(dir, { recursive: true });
   const dest = path.join(dir, "usage-live.json");
   const tmp = `${dest}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, snapshots }, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify({ version: LIVE_CACHE_VERSION, snapshots }, null, 2));
   fs.renameSync(tmp, dest);
 }
 
@@ -632,7 +635,10 @@ function loadPersistedSnapshots(): LiveUsageSnapshot[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(path.join(sidecarHome(), "usage-live.json"), "utf8")) as unknown;
     const rec = asRecord(parsed);
-    const rows = rec?.snapshots;
+    if (rec?.version !== LIVE_CACHE_VERSION) {
+      return [];
+    }
+    const rows = rec.snapshots;
     if (!Array.isArray(rows)) {
       return [];
     }
