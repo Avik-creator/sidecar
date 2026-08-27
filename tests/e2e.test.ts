@@ -203,6 +203,8 @@ describe("ingest + improve e2e", () => {
     const tokensOut = haikuRows.reduce((sum, row) => sum + row.tokensOut, 0);
     expect(tokensIn).toBe(300);
     expect(tokensOut).toBe(60);
+    expect(usage.calendarDays.map((row) => row.day)).toEqual(["2026-08-03", "2026-08-02", "2026-08-01"]);
+    expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
     const improve = runImprove(store);
