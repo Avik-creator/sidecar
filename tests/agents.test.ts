@@ -50,7 +50,63 @@ describe("agent ranking", () => {
     expect(next.state).toBe("active");
   });
 
-  it("does not keep stale blocking sessions in needs-attention", () => {
+  it("ends a session after the assistant turn goes idle", () => {
+    const now = Date.parse("2026-08-27T12:00:00Z");
+    const next = normalizeSession(
+      session({
+        id: "idle",
+        state: "active",
+        lastRole: "assistant",
+        lastTs: "2026-08-27T11:56:00Z",
+      }),
+      now,
+    );
+    expect(next.state).toBe("ended");
+  });
+
+  it("ends an active session with no last role once it goes quiet", () => {
+    const now = Date.parse("2026-08-27T12:00:00Z");
+    const next = normalizeSession(
+      session({
+        id: "heartbeat",
+        state: "active",
+        lastRole: null,
+        lastTs: "2026-08-27T11:56:00Z",
+      }),
+      now,
+    );
+    expect(next.state).toBe("ended");
+  });
+
+  it("keeps a session working while the user is waiting on a fresh reply", () => {
+    const now = Date.parse("2026-08-27T12:00:00Z");
+    const next = normalizeSession(
+      session({
+        id: "waiting",
+        state: "active",
+        lastRole: "user",
+        lastTs: "2026-08-27T11:59:00Z",
+      }),
+      now,
+    );
+    expect(next.state).toBe("active");
+  });
+
+  it("stops showing a waiting session as working after several minutes", () => {
+    const now = Date.parse("2026-08-27T12:00:00Z");
+    const next = normalizeSession(
+      session({
+        id: "stuck-wait",
+        state: "active",
+        lastRole: "user",
+        lastTs: "2026-08-27T11:54:00Z",
+      }),
+      now,
+    );
+    expect(next.state).toBe("ended");
+  });
+
+  it("does not keep a permission prompt pending after it goes stale", () => {
     const now = Date.parse("2026-08-27T12:00:00Z");
     const next = normalizeSession(
       session({

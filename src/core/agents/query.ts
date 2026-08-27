@@ -1,8 +1,10 @@
 import type { SessionRecord } from "../../shared/types.js";
 import type { Store } from "../db/store.js";
 
-const STALE_MS = 30 * 60 * 1000;
-const RECENT_UNKNOWN_MS = 5 * 60 * 1000;
+const IDLE_MS = 2 * 60 * 1000;
+const WORKING_MS = 5 * 60 * 1000;
+const STALE_MS = 10 * 60 * 1000;
+const RECENT_UNKNOWN_MS = 2 * 60 * 1000;
 
 export function liveSessions(store: Store): SessionRecord[] {
   const now = Date.now();
@@ -21,10 +23,23 @@ export function normalizeSession(session: SessionRecord, now = Date.now()): Sess
   if (age > STALE_MS) {
     return { ...session, state: "ended", hasBlocking: false };
   }
-  if (session.state === "unknown" && age <= RECENT_UNKNOWN_MS) {
-    return { ...session, state: "active" };
+  if (session.state === "ended") {
+    return { ...session, hasBlocking: false };
   }
-  return session;
+  const current =
+    session.state === "unknown" && age <= RECENT_UNKNOWN_MS
+      ? { ...session, state: "active" as const }
+      : session;
+  if (current.state === "unknown") {
+    return { ...current, state: "ended", hasBlocking: false };
+  }
+  if (current.state === "active" && current.lastRole === "user" && age > WORKING_MS) {
+    return { ...current, state: "ended", hasBlocking: false };
+  }
+  if (current.state === "active" && current.lastRole !== "user" && age > IDLE_MS) {
+    return { ...current, state: "ended", hasBlocking: false };
+  }
+  return current;
 }
 
 export function compareSessions(a: SessionRecord, b: SessionRecord): number {

@@ -8,7 +8,7 @@ function asRows<T>(value: unknown): T {
   return value as T;
 }
 
-export interface CursorIngestResult {
+interface CursorIngestResult {
   batch: ParsedBatch;
   watermark: string;
   parseFailures: number;
@@ -36,7 +36,7 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
     const headers = asRows<CursorHeaderRow[]>(
       db
         .prepare(
-          `SELECT composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value
+          `SELECT composerId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, value
            FROM composerHeaders
            WHERE COALESCE(recency, lastUpdatedAt, createdAt, 0) >= ?
            ORDER BY COALESCE(recency, lastUpdatedAt, createdAt, 0) ASC`,
@@ -76,7 +76,7 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
         title: asString(value.name) ?? asString(value.subtitle),
         startedAt: isoFromMs(header.createdAt),
         endedAt: header.isArchived ? isoFromMs(header.lastUpdatedAt ?? header.recency) : null,
-        lastTs: isoFromMs(header.lastUpdatedAt ?? header.recency ?? header.createdAt),
+        lastTs: isoFromMs(header.createdAt) ?? isoFromMs(header.lastUpdatedAt ?? header.recency),
         state: hasBlocking
           ? "needs_attention"
           : !header.isArchived && isRunning
@@ -125,6 +125,20 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
       }
     }
 
+    const latestTurn = new Map<string, string>();
+    for (const turn of batch.turns) {
+      const current = latestTurn.get(turn.sessionId);
+      if (!current || turn.ts > current) {
+        latestTurn.set(turn.sessionId, turn.ts);
+      }
+    }
+    for (const session of batch.sessions) {
+      const turnTs = latestTurn.get(session.id);
+      if (turnTs) {
+        session.lastTs = turnTs;
+      }
+    }
+
     return {
       batch,
       watermark: String(maxRecency),
@@ -146,7 +160,6 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
 
 interface CursorHeaderRow {
   composerId: string;
-  workspaceId: string | null;
   createdAt: number | null;
   lastUpdatedAt: number | null;
   isArchived: number | null;
@@ -161,9 +174,6 @@ function decodeBlob(value: unknown): Record<string, unknown> {
   }
   if (value instanceof Uint8Array) {
     return JSON.parse(Buffer.from(value).toString("utf8")) as Record<string, unknown>;
-  }
-  if (Buffer.isBuffer(value)) {
-    return JSON.parse(value.toString("utf8")) as Record<string, unknown>;
   }
   throw new Error("unsupported cursor blob");
 }
@@ -199,7 +209,7 @@ function bubbleToTurn(
   const bubbleId = asString(parsed.bubbleId) ?? key.split(":").at(-1) ?? key;
   const tokenCount = asRecord(parsed.tokenCount);
   const modelInfo = asRecord(parsed.modelInfo);
-  const createdAt = asString(parsed.createdAt) ?? new Date(0).toISOString();
+  const createdAt = bubbleTimestamp(parsed);
   return {
     id: `cursor:${bubbleId}`,
     sessionId,
@@ -221,6 +231,26 @@ function bubbleToTurn(
     parentId: null,
     isUserPrompt: role === "user",
   };
+}
+
+function bubbleTimestamp(parsed: Record<string, unknown>): string {
+  const raw = parsed.createdAt ?? parsed.timestamp ?? parsed.created_at;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    const ms = raw < 1e12 ? raw * 1000 : raw;
+    return new Date(ms).toISOString();
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && /^\d+(\.\d+)?$/.test(raw.trim()) && numeric > 0) {
+      const ms = numeric < 1e12 ? numeric * 1000 : numeric;
+      return new Date(ms).toISOString();
+    }
+    const ms = Date.parse(raw);
+    if (Number.isFinite(ms) && ms > 0) {
+      return new Date(ms).toISOString();
+    }
+  }
+  return new Date(0).toISOString();
 }
 
 function isoFromMs(value: number | null | undefined): string | null {
