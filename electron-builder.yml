@@ -30,3 +30,4 @@ win:
   target: []
 linux:
   target: []
+publish: never
