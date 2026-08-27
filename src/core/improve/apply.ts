@@ -106,7 +106,7 @@ export function validateTarget(targetFile: string): string {
   return candidate;
 }
 
-export function applyDiff(before: string, diff: string): string {
+function applyDiff(before: string, diff: string): string {
   const plus = diff
     .split("\n")
     .filter((line) => line.startsWith("+") && !line.startsWith("+++"))

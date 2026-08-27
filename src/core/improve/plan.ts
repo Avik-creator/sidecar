@@ -6,7 +6,7 @@ import type { Store } from "../db/store.js";
 import { sha256 } from "../hash.js";
 import { boundedContext } from "../redaction.js";
 
-export interface PlannedSuggestion {
+interface PlannedSuggestion {
   targetFile: string;
   diff: string;
   rationale: string;
@@ -85,7 +85,7 @@ ${samples}
 `;
 }
 
-export function unifiedDiff(filePath: string, before: string, after: string): string {
+function unifiedDiff(filePath: string, before: string, after: string): string {
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
   const header = `--- a/${filePath}\n+++ b/${filePath}\n`;

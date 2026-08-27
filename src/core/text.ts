@@ -46,7 +46,7 @@ export function firstLine(text: string): string {
   return line.trim();
 }
 
-export function normalizeKey(text: string): string {
+function normalizeKey(text: string): string {
   return stripCodeFences(text)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")

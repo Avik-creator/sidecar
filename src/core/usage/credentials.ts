@@ -93,7 +93,7 @@ export function jwtExpiryMs(token: string | null | undefined): number | null {
   return typeof exp === "number" && Number.isFinite(exp) ? exp * 1000 : null;
 }
 
-export function jwtSubject(token: string | null | undefined): string | null {
+function jwtSubject(token: string | null | undefined): string | null {
   const sub = jwtPayload(token)?.sub;
   return typeof sub === "string" && sub.trim() ? sub.trim() : null;
 }
@@ -269,10 +269,6 @@ function readItemTable(db: DatabaseSync, key: string): string | null {
   }
   if (value instanceof Uint8Array) {
     const text = Buffer.from(value).toString("utf8").trim();
-    return text || null;
-  }
-  if (Buffer.isBuffer(value)) {
-    const text = value.toString("utf8").trim();
     return text || null;
   }
   return null;

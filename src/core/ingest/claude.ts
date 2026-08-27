@@ -43,7 +43,7 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     return "skip";
   }
   const id = `claude:${sessionId}`;
-  const ts = asString(rec.timestamp) ?? fallbackTs(rec);
+  const ts = asString(rec.timestamp) ?? new Date(0).toISOString();
   const cwd = asString(rec.cwd);
   const gitBranch = asString(rec.gitBranch);
   const isSidechain = asBool(rec.isSidechain);
@@ -179,10 +179,6 @@ function sessionIdFromPath(filePath: string): string | null {
     return base.slice(0, -".jsonl".length);
   }
   return null;
-}
-
-function fallbackTs(rec: Record<string, unknown>): string {
-  return asString(rec.timestamp) ?? new Date(0).toISOString();
 }
 
 function claudeSessionState(rec: Record<string, unknown>, type: string): SessionRecord["state"] {

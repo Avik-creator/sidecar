@@ -3,12 +3,11 @@ import type { SourceFileState } from "../db/store.js";
 import { MAX_JSONL_LINE, PARSER_VERSION } from "../constants.js";
 import type { Harness } from "../../shared/types.js";
 
-export interface JsonlLine {
-  offset: number;
+interface JsonlLine {
   text: string;
 }
 
-export interface FileIdentity {
+interface FileIdentity {
   inode: string;
   size: number;
   mtimeMs: number;
@@ -62,7 +61,7 @@ export function readJsonlFromOffset(filePath: string, startOffset: number): {
     fs.readSync(fd, buffer, 0, length, startOffset);
     const chunk = buffer.toString("utf8");
     const parts = chunk.split("\n");
-    const complete = chunk.endsWith("\n") ? parts.slice(0, -1) : parts.slice(0, -1);
+    const complete = parts.slice(0, -1);
     const remainder = chunk.endsWith("\n") ? "" : (parts.at(-1) ?? "");
     const lines: JsonlLine[] = [];
     let cursor = startOffset;
@@ -75,7 +74,7 @@ export function readJsonlFromOffset(filePath: string, startOffset: number): {
         continue;
       }
       if (part.trim().length > 0) {
-        lines.push({ offset: cursor, text: part });
+        lines.push({ text: part });
       }
       cursor += recordBytes;
     }

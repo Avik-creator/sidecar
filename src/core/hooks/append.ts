@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { hooksLogPath, sidecarHome } from "../paths.js";
 
-export interface HookEvent {
+interface HookEvent {
   harness: "claude" | "codex" | "cursor";
   type: string;
   sessionId?: string;

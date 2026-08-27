@@ -5,6 +5,8 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": false,
     "skipLibCheck": true,
@@ -26,6 +28,8 @@
     "src/shared/**/*.ts",
     "tests/**/*.ts",
     "electron.vite.config.ts",
+    "vite.preview.config.ts",
+    "scripts/**/*.ts",
     "vitest.config.ts"
   ]
 }
