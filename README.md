@@ -48,7 +48,7 @@ flowchart TB
     Improve[Improve]
   end
 
-  APIs["Unofficial provider APIs<br/>plan windows · credits · resets"]
+  APIs["Provider APIs<br/>plan windows · credits · resets"]
 
   Claude --> Ingest
   Codex --> Ingest
@@ -70,8 +70,6 @@ Live usage is a **read-only probe**:
 2. Provider APIs supply plan limits, utilization, reset times, and credits.
 3. Tokens are read from existing files and Keychain items. Refresh stays in memory and is never written back.
 4. Responses are cached for five minutes, `Retry-After` is honored, and only normalized snapshots are stored in `~/.sidecar/usage-live.json`.
-
-Those APIs are unofficial. When they change, Sidecar degrades to the last good snapshot instead of guessing.
 
 ## Install
 
