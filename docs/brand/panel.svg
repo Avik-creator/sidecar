@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 700" width="400" height="700" role="img" aria-label="Sidecar menu bar panel">
+  <rect width="400" height="700" rx="18" fill="#f4efe6"/>
+  <rect x="16" y="14" width="368" height="36" fill="none"/>
+  <text x="200" y="38" text-anchor="middle" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="17" font-weight="700" fill="#1a1612">Sidecar</text>
+  <g transform="translate(242 22) scale(0.5)"><circle cx="12" cy="7.68" r="2.04" fill="none" stroke="#d56a2d" stroke-width="1.68" /><circle cx="16.11" cy="10.67" r="2.04" fill="none" stroke="#d56a2d" stroke-width="1.68" /><circle cx="14.54" cy="15.49" r="2.04" fill="none" stroke="#d56a2d" stroke-width="1.68" /><circle cx="9.46" cy="15.49" r="2.04" fill="none" stroke="#d56a2d" stroke-width="1.68" /><circle cx="7.89" cy="10.67" r="2.04" fill="none" stroke="#d56a2d" stroke-width="1.68" /><circle cx="12" cy="12" r="1.08" fill="#d56a2d" /></g>
+  <rect x="12" y="58" width="376" height="52" rx="14" fill="#efe8dc"/>
+  <g>
+    <rect x="30" y="68" width="84" height="32" rx="10" fill="#fffaf3"/>
+    <text x="72" y="89" text-anchor="middle" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#1a1612">Agents</text>
+  </g>
+  <g>
+    <rect x="124" y="68" width="84" height="32" rx="10" fill="transparent"/>
+    <text x="166" y="89" text-anchor="middle" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#8a8174">Setup</text>
+  </g>
+  <g>
+    <rect x="218" y="68" width="84" height="32" rx="10" fill="transparent"/>
+    <text x="260" y="89" text-anchor="middle" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#8a8174">Usage</text>
+  </g>
+  <g>
+    <rect x="312" y="68" width="84" height="32" rx="10" fill="transparent"/>
+    <text x="354" y="89" text-anchor="middle" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#8a8174">Improve</text>
+  </g>
+  <text x="20" y="138" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="10" font-weight="700" letter-spacing="1.4" fill="#8a8174">NEEDS YOU</text>
+  <g>
+    <rect x="16" y="150" width="368" height="92" rx="16" fill="#fffaf3" stroke="#e7dfd2"/>
+    <circle cx="38" cy="174" r="5" fill="#c4652a"/>
+    <text x="50" y="178" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#c4652a">Claude Code</text>
+    <text x="364" y="178" text-anchor="end" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">now</text>
+    <text x="34" y="204" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="14" font-weight="600" fill="#1a1612">Allow edit to app.css</text>
+    <text x="34" y="226" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">sidecar · waiting</text>
+  </g>
+  <text x="20" y="268" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="10" font-weight="700" letter-spacing="1.4" fill="#8a8174">RUNNING</text>
+  <g>
+    <rect x="16" y="280" width="368" height="92" rx="16" fill="#fffaf3" stroke="#e7dfd2"/>
+    <circle cx="38" cy="304" r="5" fill="#1c1c1c"/>
+    <text x="50" y="308" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#1c1c1c">Codex</text>
+    <text x="364" y="308" text-anchor="end" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">now</text>
+    <text x="34" y="334" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="14" font-weight="600" fill="#1a1612">Wire live usage windows</text>
+    <text x="34" y="356" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">sidecar · working</text>
+  </g>
+  <g>
+    <rect x="16" y="384" width="368" height="92" rx="16" fill="#fffaf3" stroke="#e7dfd2"/>
+    <circle cx="38" cy="408" r="5" fill="#4f46c8"/>
+    <text x="50" y="412" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" font-weight="600" fill="#4f46c8">Cursor</text>
+    <text x="364" y="412" text-anchor="end" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">now</text>
+    <text x="34" y="438" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="14" font-weight="600" fill="#1a1612">Keep Improve fully local</text>
+    <text x="34" y="460" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#8a8174">sidecar · working</text>
+  </g>
+  <rect x="0" y="652" width="400" height="48" fill="#efe8dc"/>
+  <text x="24" y="681" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#1a1612">Claude Code</text>
+  <text x="132" y="681" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#1a1612">Codex</text>
+  <text x="214" y="681" font-family="Avenir Next, SF Pro Text, sans-serif" font-size="11" fill="#1a1612">Cursor</text>
+</svg>
