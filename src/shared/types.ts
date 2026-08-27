@@ -92,14 +92,6 @@ export interface UsageEventRecord {
   cacheWrite: number;
 }
 
-export interface EventRecord {
-  sessionId: string | null;
-  harness: Harness;
-  type: string;
-  ts: string;
-  payloadJson: string;
-}
-
 export interface CandidateRecord {
   turnId: string;
   sessionId: string;
@@ -194,10 +186,16 @@ export interface UsageWindow {
   resetsAt: string | null;
 }
 
+export interface UsageCalendarDay {
+  day: string;
+  tokensIn: number;
+  tokensOut: number;
+  usdEstimate: number;
+}
+
 export interface LiveUsageSnapshot {
   provider: Harness;
   plan: string | null;
-  unofficial: boolean;
   status: LiveUsageStatus;
   fetchedAt: string | null;
   error: string | null;
@@ -209,6 +207,7 @@ export interface UsageReport {
   timezone: string;
   priceVersion: number;
   days: UsageDayRow[];
+  calendarDays: UsageCalendarDay[];
   totals: {
     tokensIn: number;
     tokensOut: number;
