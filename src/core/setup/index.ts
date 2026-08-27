@@ -10,12 +10,6 @@ import { claudeRoot, codexRoot, cursorHome } from "../paths.js";
 import { firstLine } from "../text.js";
 import type { Store } from "../db/store.js";
 
-export function indexSetup(store: Store): SetupItemRecord[] {
-  const items = collectSetup(store);
-  store.replaceSetupItems(items);
-  return items;
-}
-
 export function collectSetup(store: Store): SetupItemRecord[] {
   const items: SetupItemRecord[] = [
     ...scanClaude(),

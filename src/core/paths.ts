@@ -13,10 +13,6 @@ export function dbPath(): string {
   return path.join(sidecarHome(), "sidecar.sqlite");
 }
 
-export function lockPath(): string {
-  return path.join(sidecarHome(), "sidecar.lock");
-}
-
 export function backupDir(): string {
   return path.join(sidecarHome(), "backups");
 }

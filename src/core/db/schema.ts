@@ -140,32 +140,6 @@ CREATE TABLE IF NOT EXISTS suggestion (
   FOREIGN KEY (cluster_id) REFERENCES cluster(id)
 );
 
-CREATE TABLE IF NOT EXISTS analysis_run (
-  id TEXT PRIMARY KEY,
-  stage TEXT NOT NULL,
-  prompt_version TEXT,
-  input_hash TEXT NOT NULL,
-  model TEXT,
-  status TEXT NOT NULL,
-  tokens_in INTEGER,
-  tokens_out INTEGER,
-  error TEXT,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS setup_item (
-  id TEXT PRIMARY KEY,
-  harness TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  path TEXT NOT NULL,
-  title TEXT,
-  scope TEXT NOT NULL,
-  mtime_ms INTEGER,
-  hash TEXT,
-  preview TEXT,
-  UNIQUE (harness, kind, path)
-);
-
 CREATE TABLE IF NOT EXISTS integration_health (
   harness TEXT PRIMARY KEY,
   status TEXT NOT NULL,

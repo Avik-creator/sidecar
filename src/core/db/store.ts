@@ -8,7 +8,6 @@ import type {
   Harness,
   IntegrationHealth,
   SessionRecord,
-  SetupItemRecord,
   SuggestionRecord,
   SuggestionStatus,
   TurnRecord,
@@ -19,9 +18,7 @@ function asRows<T>(value: unknown): T {
   return value as T;
 }
 
-export type SqliteDb = DatabaseSync;
-
-export function openDatabase(filePath: string): DatabaseSync {
+function openDatabase(filePath: string): DatabaseSync {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const db = new DatabaseSync(filePath);
   db.exec("PRAGMA foreign_keys = ON");
@@ -109,6 +106,7 @@ export class Store {
            started_at = COALESCE(session.started_at, excluded.started_at),
            ended_at = COALESCE(excluded.ended_at, session.ended_at),
            last_ts = CASE
+             WHEN excluded.state = 'unknown' THEN session.last_ts
              WHEN excluded.last_ts IS NOT NULL AND (session.last_ts IS NULL OR excluded.last_ts > session.last_ts)
              THEN excluded.last_ts ELSE session.last_ts END,
            state = CASE
@@ -302,27 +300,6 @@ export class Store {
       .run(next.status, next.appliedAt, next.backupPath, next.appliedHash, next.baseHash, id);
   }
 
-  replaceSetupItems(items: SetupItemRecord[]): void {
-    this.db.exec("DELETE FROM setup_item");
-    const stmt = this.db.prepare(
-      `INSERT INTO setup_item(id, harness, kind, path, title, scope, mtime_ms, hash, preview)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    for (const item of items) {
-      stmt.run(
-        item.id,
-        item.harness,
-        item.kind,
-        item.path,
-        item.title,
-        item.scope,
-        item.mtimeMs,
-        item.hash,
-        item.preview,
-      );
-    }
-  }
-
   setHealth(row: IntegrationHealth): void {
     this.db
       .prepare(
@@ -416,11 +393,6 @@ export class Store {
   getSuggestion(id: string): SuggestionRecord | undefined {
     const row = asRows<SuggestionRow | undefined>(this.db.prepare(`SELECT * FROM suggestion WHERE id = ?`).get(id));
     return row ? mapSuggestion(row) : undefined;
-  }
-
-  listSetup(): SetupItemRecord[] {
-    const rows = asRows<SetupRow[]>(this.db.prepare(`SELECT * FROM setup_item ORDER BY harness, kind, path`).all());
-    return rows.map(mapSetup);
   }
 
   listHealth(): IntegrationHealth[] {
@@ -587,18 +559,6 @@ interface SuggestionRow {
   applied_hash: string | null;
 }
 
-interface SetupRow {
-  id: string;
-  harness: string;
-  kind: string;
-  path: string;
-  title: string | null;
-  scope: string;
-  mtime_ms: number | null;
-  hash: string | null;
-  preview: string | null;
-}
-
 interface HealthRow {
   harness: string;
   status: string;
@@ -733,16 +693,3 @@ function mapSuggestion(row: SuggestionRow): SuggestionRecord {
   };
 }
 
-function mapSetup(row: SetupRow): SetupItemRecord {
-  return {
-    id: row.id,
-    harness: row.harness as SetupItemRecord["harness"],
-    kind: row.kind as SetupItemRecord["kind"],
-    path: row.path,
-    title: row.title,
-    scope: row.scope as SetupItemRecord["scope"],
-    mtimeMs: row.mtime_ms,
-    hash: row.hash,
-    preview: row.preview,
-  };
-}
