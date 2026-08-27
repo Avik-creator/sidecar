@@ -9,7 +9,6 @@ export function emptySnapshot(
   return {
     provider,
     plan: null,
-    unofficial: true,
     status,
     fetchedAt: null,
     error,
@@ -20,12 +19,7 @@ export function emptySnapshot(
 
 export function parseClaudeUsage(data: unknown, plan: string | null, fetchedAt: string): LiveUsageSnapshot {
   const rec = asRecord(data) ?? {};
-  const windows: UsageWindow[] = [];
-  pushPercentWindow(windows, "Session", rec.five_hour);
-  pushPercentWindow(windows, "Weekly", rec.seven_day);
-  pushPercentWindow(windows, "Opus", rec.seven_day_opus);
-  pushPercentWindow(windows, "Sonnet", rec.seven_day_sonnet);
-  pushPercentWindow(windows, "Claude Design", rec.seven_day_omelette);
+  const windows = mergeClaudeWindows(rec);
   const extra = asRecord(rec.extra_usage);
   const details: LiveUsageSnapshot["details"] = [];
   if (extra && asBool(extra.is_enabled)) {
@@ -40,7 +34,6 @@ export function parseClaudeUsage(data: unknown, plan: string | null, fetchedAt: 
   return {
     provider: "claude",
     plan,
-    unofficial: true,
     status: windows.length > 0 ? "ok" : "unavailable",
     fetchedAt,
     error: windows.length > 0 ? null : "Claude usage response had no windows",
@@ -104,7 +97,6 @@ export function parseCodexUsage(
   return {
     provider: "codex",
     plan: formatCodexPlan(asString(rec.plan_type)),
-    unofficial: true,
     status: windows.length > 0 || details.length > 0 ? "ok" : "unavailable",
     fetchedAt,
     error: windows.length > 0 || details.length > 0 ? null : "Codex usage response had no windows",
@@ -187,7 +179,6 @@ export function parseCursorUsage(
   return {
     provider: "cursor",
     plan: formatPlanLabel(planName),
-    unofficial: true,
     status: windows.length > 0 ? "ok" : "unavailable",
     fetchedAt,
     error: windows.length > 0 ? null : "Cursor usage response had no windows",
@@ -207,7 +198,6 @@ export function parseCursorRequestUsage(data: unknown, planName: string | null, 
   return {
     provider: "cursor",
     plan: formatPlanLabel(planName),
-    unofficial: true,
     status: "ok",
     fetchedAt,
     error: null,
@@ -249,13 +239,100 @@ function formatCodexPlan(planType: string | null): string | null {
   return formatPlanLabel(planType);
 }
 
+function mergeClaudeWindows(rec: Record<string, unknown>): UsageWindow[] {
+  const fromLimits = parseClaudeLimits(rec.limits);
+  const fromLegacy: UsageWindow[] = [];
+  pushPercentWindow(fromLegacy, "Session", rec.five_hour);
+  pushPercentWindow(fromLegacy, "Weekly", rec.seven_day);
+  pushPercentWindow(fromLegacy, "Opus", rec.seven_day_opus);
+  pushPercentWindow(fromLegacy, "Sonnet", rec.seven_day_sonnet);
+  pushPercentWindow(fromLegacy, "Claude Design", rec.seven_day_omelette);
+  if (fromLimits.length === 0) {
+    return fromLegacy;
+  }
+  const seen = new Set(fromLimits.map((row) => row.label));
+  const windows = [...fromLimits];
+  for (const row of fromLegacy) {
+    if (seen.has(row.label)) {
+      continue;
+    }
+    seen.add(row.label);
+    windows.push(row);
+  }
+  return windows;
+}
+
+function parseClaudeLimits(raw: unknown): UsageWindow[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const windows: UsageWindow[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    const rec = asRecord(entry);
+    if (!rec) {
+      continue;
+    }
+    const used = windowPercent(rec);
+    if (used == null) {
+      continue;
+    }
+    const resetsAt = isoFromWindow(rec);
+    if (used === 0 && resetsAt == null) {
+      continue;
+    }
+    const label = claudeLimitLabel(rec);
+    if (!label || seen.has(label)) {
+      continue;
+    }
+    seen.add(label);
+    windows.push(percentWindow(label, used, resetsAt));
+  }
+  return windows;
+}
+
+function claudeLimitLabel(rec: Record<string, unknown>): string | null {
+  const kind = asString(rec.kind)?.trim().toLowerCase() ?? "";
+  const modelName = asString(asRecord(asRecord(rec.scope)?.model)?.display_name)?.trim() ?? null;
+  switch (kind) {
+    case "session":
+      return "Session";
+    case "weekly_all":
+    case "weekly":
+      return "Weekly";
+    case "weekly_scoped":
+      return modelName || "Weekly model";
+    case "credits":
+    case "extra_usage":
+    case "spend":
+      return null;
+    default:
+      return modelName || (kind ? formatPlanLabel(kind) : null);
+  }
+}
+
 function pushPercentWindow(windows: UsageWindow[], label: string, raw: unknown): void {
   const rec = asRecord(raw);
-  const used = finiteNumber(rec?.utilization) ?? finiteNumber(rec?.used_percent);
+  const used = windowPercent(rec);
   if (used == null) {
     return;
   }
   windows.push(percentWindow(label, used, isoFromWindow(rec)));
+}
+
+function windowPercent(rec: Record<string, unknown> | null): number | null {
+  if (!rec) {
+    return null;
+  }
+  let max: number | null = null;
+  for (const key of ["percent", "used_percent", "utilization"] as const) {
+    const n = finiteNumber(rec[key]);
+    if (n == null) {
+      continue;
+    }
+    max = max == null ? n : Math.max(max, n);
+  }
+  return max;
 }
 
 function percentWindow(label: string, used: number, resetsAt: string | null): UsageWindow {
@@ -275,7 +352,7 @@ function isoFromWindow(rec: Record<string, unknown> | null): string | null {
   return toIso(rec.resets_at);
 }
 
-export function toIso(value: unknown): string | null {
+function toIso(value: unknown): string | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     const ms = value < 1e12 ? value * 1000 : value;
     return new Date(ms).toISOString();

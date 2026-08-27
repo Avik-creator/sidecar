@@ -4,6 +4,7 @@ import { chatgptAccountId, jwtExpiryMs, jwtPayload, parseStoredJson } from "../s
 import { parseRetryAfterMs, type HttpRequest, type HttpResponse } from "../src/core/usage/http.js";
 import { fetchLiveUsage, resetLiveUsageCacheForTests } from "../src/core/usage/live.js";
 import { parseClaudeUsage, parseCodexUsage, parseCursorUsage } from "../src/core/usage/parse.js";
+import { calendarDaysFromRows, formatDay } from "../src/core/usage/report.js";
 
 afterEach(() => {
   resetLiveUsageCacheForTests();
@@ -28,6 +29,33 @@ describe("usage parsers", () => {
       limit: 100,
       unit: "usd",
     });
+  });
+
+  it("prefers Claude limits[] over a stale seven_day utilization of 0", () => {
+    const snapshot = parseClaudeUsage(
+      {
+        five_hour: { utilization: 21, resets_at: "2026-08-27T12:00:00.000Z" },
+        seven_day: { utilization: 0, resets_at: "2026-09-03T00:00:00.000Z" },
+        limits: [
+          { kind: "session", percent: 21, resets_at: "2026-08-27T12:00:00.000Z" },
+          { kind: "weekly_all", percent: 100, resets_at: "2026-09-03T00:00:00.000Z" },
+          {
+            kind: "weekly_scoped",
+            percent: 80,
+            resets_at: "2026-09-03T00:00:00.000Z",
+            scope: { model: { display_name: "Fable" } },
+          },
+          { kind: "weekly_scoped", percent: 0, resets_at: null, scope: { model: { display_name: "Opus" } } },
+        ],
+      },
+      "Max",
+      "2026-08-27T10:00:00.000Z",
+    );
+    expect(snapshot.windows.find((row) => row.label === "Session")).toMatchObject({ used: 21 });
+    expect(snapshot.windows.find((row) => row.label === "Weekly")).toMatchObject({ used: 100 });
+    expect(snapshot.windows.find((row) => row.label === "Fable")).toMatchObject({ used: 80 });
+    expect(snapshot.windows.some((row) => row.label === "Opus")).toBe(false);
+    expect(snapshot.windows.filter((row) => row.label === "Weekly")).toHaveLength(1);
   });
 
   it("maps Codex windows from body and headers", () => {
@@ -90,9 +118,9 @@ describe("live usage cache", () => {
   it("caches successful probes for five minutes", async () => {
     let now = 1_000_000;
     let calls = 0;
-    const request = async (input: HttpRequest): Promise<HttpResponse> => {
+    const request = async (): Promise<HttpResponse> => {
       calls += 1;
-      return jsonResponse(input.url, 200, {
+      return jsonResponse(200, {
         five_hour: { utilization: 12, resets_at: "2026-08-27T12:00:00.000Z" },
         seven_day: { utilization: 4, resets_at: "2026-08-31T00:00:00.000Z" },
       });
@@ -124,10 +152,10 @@ describe("live usage cache", () => {
   it("keeps stale windows when a later probe fails", async () => {
     let now = 1_000_000;
     let calls = 0;
-    const request = async (input: HttpRequest): Promise<HttpResponse> => {
+    const request = async (): Promise<HttpResponse> => {
       calls += 1;
       if (calls === 1) {
-        return jsonResponse(input.url, 200, {
+        return jsonResponse(200, {
           five_hour: { utilization: 20, resets_at: "2026-08-27T12:00:00.000Z" },
         });
       }
@@ -158,7 +186,7 @@ describe("live usage cache", () => {
       if (userAgents.length === 1) {
         return { status: 429, bodyText: "rate limited", headers: { "retry-after": "120" } };
       }
-      return jsonResponse(input.url, 200, { five_hour: { utilization: 9 } });
+      return jsonResponse(200, { five_hour: { utilization: 9 } });
     };
     const first = await fetchLiveUsage({
       now: () => now,
@@ -213,10 +241,10 @@ describe("live usage cache", () => {
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const request = async (input: HttpRequest): Promise<HttpResponse> => {
+    const request = async (): Promise<HttpResponse> => {
       started += 1;
       await barrier;
-      return jsonResponse(input.url, 200, { five_hour: { utilization: 3 } });
+      return jsonResponse(200, { five_hour: { utilization: 3 } });
     };
     const deps = {
       request,
@@ -243,10 +271,10 @@ describe("live usage cache", () => {
       urls.push(input.url);
       if (input.url.includes("/v1/oauth/token")) {
         expect(input.bodyText).not.toContain("must-not-leak");
-        return jsonResponse(input.url, 200, { access_token: "sk-ant-oat01-new", expires_in: 3600 });
+        return jsonResponse(200, { access_token: "sk-ant-oat01-new", expires_in: 3600 });
       }
       expect(input.headers?.Authorization).toBe("Bearer sk-ant-oat01-new");
-      return jsonResponse(input.url, 200, { five_hour: { utilization: 1 } });
+      return jsonResponse(200, { five_hour: { utilization: 1 } });
     };
     await fetchLiveUsage({
       now: () => 2_000_000,
@@ -261,7 +289,50 @@ describe("live usage cache", () => {
     });
     expect(urls.some((url) => url.includes("/v1/oauth/token"))).toBe(true);
     expect(JSON.stringify(persisted)).not.toContain("sk-ant");
-    expect(JSON.stringify(persisted)).toContain("\"unofficial\":true");
+  });
+});
+
+describe("usage calendar days", () => {
+  it("groups model rows into one total per calendar day", () => {
+    const days = calendarDaysFromRows([
+      {
+        day: "2026-08-27",
+        harness: "claude",
+        model: "sonnet",
+        tokensIn: 1,
+        tokensOut: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        usdEstimate: 1.5,
+      },
+      {
+        day: "2026-08-27",
+        harness: "codex",
+        model: "gpt",
+        tokensIn: 3,
+        tokensOut: 4,
+        cacheRead: 0,
+        cacheWrite: 0,
+        usdEstimate: 2.25,
+      },
+      {
+        day: "2026-08-26",
+        harness: "claude",
+        model: "haiku",
+        tokensIn: 10,
+        tokensOut: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        usdEstimate: 0.1,
+      },
+    ]);
+    expect(days.map((row) => row.day)).toEqual(["2026-08-27", "2026-08-26"]);
+    expect(days[0]).toMatchObject({ usdEstimate: 3.75, tokensIn: 4, tokensOut: 6 });
+  });
+
+  it("labels days in the requested timezone", () => {
+    expect(formatDay(Date.parse("2026-08-27T02:30:00Z"), "UTC")).toBe("2026-08-27");
+    expect(formatDay(Date.parse("2026-08-27T02:30:00Z"), "America/Los_Angeles")).toBe("2026-08-26");
   });
 });
 
@@ -278,7 +349,7 @@ function claudeTokens(overrides: Partial<OAuthTokens> = {}): OAuthTokens {
   };
 }
 
-function jsonResponse(url: string, status: number, body: unknown): HttpResponse {
+function jsonResponse(status: number, body: unknown): HttpResponse {
   return {
     status,
     bodyText: JSON.stringify(body),
