@@ -75,7 +75,7 @@ Those APIs are unofficial. When they change, Sidecar degrades to the last good s
 
 ## Install
 
-macOS, Node 22+.
+macOS, Node 22+. Grab a build from [Releases](https://github.com/Avik-creator/sidecar/releases), or run from source:
 
 ```bash
 git clone https://github.com/Avik-creator/sidecar.git
@@ -91,6 +91,15 @@ npm run dev
 npm run ingest
 npm run sidecar -- usage
 npm run sidecar -- improve
+```
+
+### Release a build
+
+CI runs typecheck, tests, and `electron-vite build` on every push to `main`. Pushing a version tag packages unsigned arm64 and x64 DMGs and attaches them to a GitHub Release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 ## CLI
