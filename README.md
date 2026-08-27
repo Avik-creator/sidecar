@@ -1,75 +1,90 @@
 # Sidecar
 
-Local-first companion for **Claude Code**, **Codex**, and **Cursor**.
-
-A macOS menu bar app — no dock icon — that watches local agent transcripts and shows what is running, who needs you, how setup is wired, live plan usage, and repeated corrections worth promoting into rules.
-
 <p align="center">
-  <img src="docs/images/banner.png" alt="Sidecar menu bar panel over a macOS desktop" width="920" />
+  <img src="docs/brand/mark.svg" width="72" height="72" alt="Sidecar mark" />
 </p>
 
-## Why
+<p align="center"><strong>Stop guessing which agent is waiting on you.</strong></p>
 
-Agents already leave a trail on disk. Sidecar reads that trail instead of inventing another cloud dashboard.
-
-- **Agents** — sessions that are running, ended, or waiting on you
-- **Setup** — skills, rules, hooks, and MCPs across the tools you actually use
-- **Usage** — exact local token history plus live plan windows from provider APIs
-- **Improve** — corrections that repeat across sessions, proposed as rule diffs you apply yourself
-
-Data lives in `~/.sidecar/sidecar.sqlite`. Sidecar never rewrites Claude, Codex, or Cursor credentials.
-
-## Screenshots
+<p align="center">Sidecar lives in the macOS menu bar and reads the trail <strong>Claude Code</strong>, <strong>Codex</strong>, and <strong>Cursor</strong> already leave on this Mac. No new account. No cloud copy of your chats.</p>
 
 <p align="center">
-  <img src="docs/images/agents.png" alt="Agents tab with sessions that need you and sessions that are running" width="360" />
-  &nbsp;
-  <img src="docs/images/usage.png" alt="Usage tab with live plan windows and 30-day local spend" width="360" />
+  <a href="https://github.com/Avik-creator/sidecar/releases">Get the macOS build</a>
+  ·
+  <a href="#install">Run from source</a>
 </p>
 
-## Architecture
+<p align="center">
+  <img src="docs/brand/panel.svg" alt="Sidecar panel with Claude Code waiting, Codex running, and Cursor running" width="360" />
+</p>
+
+## Why this exists
+
+You already run more than one agent. The permission prompt is in the window you are not looking at. Usage is split across three dashboards. The same “don’t do that” correction shows up in every repo.
+
+Other tools ask you to open another website and trust another copy of your transcripts. Sidecar does not. It watches local files, then shows who needs you, what is wired, what you spent, and which corrections are worth turning into rules.
+
+## What you get
+
+**Agents.** See Claude Code, Codex, and Cursor in one list — running, waiting on you, or done. Sidecar is a companion, not a fourth IDE.
+
+**Setup.** Skills, rules, hooks, and MCP servers from the agents on this machine, including Claude Code, Codex, Cursor, Gemini CLI, Cline, Windsurf, and others already on disk.
+
+**Usage.** Exact local token history plus live plan windows from the provider you are already signed into. One By day list, in your timezone.
+
+**Improve.** Repeated corrections, proposed as rule diffs you apply yourself. Nothing is sent to a Sidecar model.
+
+## How it works
+
+1. Your agents write transcripts locally. Sidecar never starts them for you.
+2. An ingest pass indexes those files into `~/.sidecar/sidecar.sqlite`.
+3. The menu bar panel stays current. There is no localhost server and no `Access-Control-Allow-Origin`.
 
 ```mermaid
 flowchart TB
   subgraph sources [Local agents]
-    Claude["Claude Code<br/>~/.claude JSONL"]
-    Codex["Codex<br/>~/.codex JSONL"]
-    Cursor["Cursor<br/>state.vscdb"]
+    Claude["Claude Code"]
+    Codex["Codex"]
+    Cursor["Cursor"]
   end
 
-  Ingest["Ingest engine<br/>chokidar + parsers + watermarks"]
-  DB[("SQLite<br/>~/.sidecar/sidecar.sqlite")]
-  Service["SidecarService<br/>Electron main + CLI"]
-
-  subgraph ui [Menu bar panel]
-    Agents[Agents]
-    Setup[Setup]
-    Usage[Usage]
-    Improve[Improve]
-  end
-
-  APIs["Provider APIs<br/>plan windows · credits · resets"]
+  Ingest["Ingest on this Mac"]
+  DB[("SQLite · ~/.sidecar")]
+  Panel["Menu bar · Agents · Setup · Usage · Improve"]
 
   Claude --> Ingest
   Codex --> Ingest
   Cursor --> Ingest
   Ingest --> DB
-  DB --> Service
-  Service --> Agents
-  Service --> Setup
-  Service --> Usage
-  Service --> Improve
-  APIs -.-> Usage
+  DB --> Panel
 ```
 
-Everything runs in the Electron main process and talks to the renderer over IPC. There is no localhost HTTP server and no `Access-Control-Allow-Origin: *`.
+## Privacy
 
-Live usage is a **read-only probe**:
+Sidecar is local-first on purpose.
 
-1. Local transcripts remain the source of truth for token and cost history.
-2. Provider APIs supply plan limits, utilization, reset times, and credits.
-3. Tokens are read from existing files and Keychain items. Refresh stays in memory and is never written back.
-4. Responses are cached for five minutes, `Retry-After` is honored, and only normalized snapshots are stored in `~/.sidecar/usage-live.json`.
+| Reads | Never writes |
+| --- | --- |
+| `~/.claude` transcripts and OAuth files | `.credentials.json` |
+| `~/.codex` transcripts and `auth.json` | Codex `auth.json` |
+| Cursor `state.vscdb` | Cursor SQLite |
+| macOS Keychain items the agents already stored | refreshed tokens to disk |
+
+The only files Sidecar creates are under `~/.sidecar/`.
+
+## FAQ
+
+**Is this only for Cursor?**
+No. Sessions, spend, and live plan windows cover Claude Code, Codex, and Cursor. Setup also indexes skills and rules from other local agents.
+
+**Do I paste a Sidecar key?**
+No. Sidecar reads the login the agent already has. Refresh stays in memory.
+
+**Will it upload my repo?**
+No. Improve clusters corrections on this Mac. You apply the diff yourself.
+
+**Is the orange flower Electron’s icon?**
+No. That mark is Sidecar — the same SVG in the menu bar, the app icon, and this page.
 
 ## Install
 
@@ -83,7 +98,7 @@ npm test
 npm run dev
 ```
 
-`npm run dev` puts a Sidecar flower in the menu bar. Click it for the panel. Right-click the icon to quit.
+`npm run dev` puts the Sidecar mark in the menu bar. Click it for the panel. Right-click the icon to quit.
 
 ```bash
 npm run ingest
@@ -93,7 +108,7 @@ npm run sidecar -- improve
 
 ### Release a build
 
-CI runs typecheck, tests, and `electron-vite build` on every push to `main`. Pushing a version tag packages unsigned arm64 and x64 DMGs and attaches them to a GitHub Release:
+CI runs typecheck, tests, and `electron-vite build` on every push to `main`. Pushing a version tag packages unsigned arm64 and x64 DMGs:
 
 ```bash
 git tag v0.1.0
@@ -117,26 +132,16 @@ sidecar hook --harness claude --type PermissionRequest --session "$SESSION_ID"
 
 Set `SIDECAR_LIVE_USAGE=0` to skip provider probes and keep the local-only usage report.
 
-## Privacy
-
-Sidecar is local-first on purpose.
-
-| Reads | Never writes |
-| --- | --- |
-| `~/.claude` transcripts and OAuth files | `.credentials.json` |
-| `~/.codex` transcripts and `auth.json` | Codex `auth.json` |
-| Cursor `state.vscdb` ItemTable tokens | Cursor SQLite |
-| macOS Keychain items the agents already stored | refreshed tokens to disk |
-
-The only files Sidecar creates are under `~/.sidecar/`.
-
 ## Development
 
 ```bash
 npm run typecheck
 npm test
+npm run brand
 npm run build
 ```
+
+`npm run brand` rewrites `docs/brand/mark.svg`, `docs/brand/panel.svg`, and `build/icon.png` from the same geometry the app uses.
 
 | Path | Role |
 | --- | --- |
@@ -145,5 +150,6 @@ npm run build
 | `src/core/setup` | skills, rules, hooks, MCPs |
 | `src/core/usage` | local spend + live plan probes |
 | `src/core/improve` | correction clustering |
+| `src/shared/mark.ts` | Sidecar flower used by tray, icon, and UI |
 | `src/main` | tray, IPC, file watchers |
 | `src/renderer` | menu bar panel |
