@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type {
   CandidateRecord,
   ClusterRecord,
@@ -14,8 +14,22 @@ import type {
   UsageReport,
   UsageWindow,
 } from "@shared/types";
+import {
+  AgentsIcon,
+  BellIcon,
+  HarnessMark,
+  ImproveIcon,
+  PinIcon,
+  SetupIcon,
+  SidecarMark,
+  UsageIcon,
+} from "./icons";
+import { installPreviewBridge } from "./preview";
 
 type Tab = "agents" | "setup" | "usage" | "improve";
+
+const USAGE_MIN_REFRESH_MS = 15_000;
+const SCROLL_IDLE_MS = 160;
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("agents");
@@ -31,6 +45,12 @@ export default function App() {
   const [candidates, setCandidates] = useState<CandidateRecord[]>([]);
   const [clusters, setClusters] = useState<ClusterRecord[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionRecord[]>([]);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const usageFetchedAtRef = useRef(0);
+  const scrollingRef = useRef(false);
+  const queuedRefreshRef = useRef(false);
+  const scrollEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshAgents = useCallback(async () => {
     const [nextHealth, nextSessions] = await Promise.all([
@@ -51,6 +71,7 @@ export default function App() {
         return;
       case "usage":
         setUsage(await window.sidecar.usage(30));
+        usageFetchedAtRef.current = Date.now();
         return;
       case "improve": {
         const [nextCandidates, nextClusters, nextSuggestions] = await Promise.all([
@@ -70,16 +91,56 @@ export default function App() {
     }
   }, [refreshAgents]);
 
-  useEffect(() => {
-    if (!window.sidecar || !window.sidecarEvents) {
-      setError("Renderer bridge missing. Restart npm run dev.");
+  const refreshCurrentTab = useCallback(() => {
+    const current = tabRef.current;
+    if (current === "usage" && Date.now() - usageFetchedAtRef.current < USAGE_MIN_REFRESH_MS) {
       return;
     }
+    void refreshTab(current).catch((err: unknown) => setError(String(err)));
+  }, [refreshTab]);
+
+  const handleBodyScroll = useCallback(() => {
+    scrollingRef.current = true;
+    if (scrollEndTimerRef.current) {
+      clearTimeout(scrollEndTimerRef.current);
+    }
+    scrollEndTimerRef.current = setTimeout(() => {
+      scrollingRef.current = false;
+      scrollEndTimerRef.current = null;
+      if (queuedRefreshRef.current) {
+        queuedRefreshRef.current = false;
+        refreshCurrentTab();
+      }
+    }, SCROLL_IDLE_MS);
+  }, [refreshCurrentTab]);
+
+  useEffect(() => {
+    if (!window.sidecar || !window.sidecarEvents) {
+      if (import.meta.env.DEV) {
+        installPreviewBridge();
+      } else {
+        setError("Renderer bridge missing. Restart npm run dev.");
+        return;
+      }
+    }
     void refreshAgents().catch((err: unknown) => setError(String(err)));
+    void refreshTab("usage").catch((err: unknown) => setError(String(err)));
     return window.sidecarEvents.onChanged(() => {
-      void refreshAgents().catch((err: unknown) => setError(String(err)));
+      if (scrollingRef.current) {
+        queuedRefreshRef.current = true;
+        return;
+      }
+      refreshCurrentTab();
     });
-  }, [refreshAgents]);
+  }, [refreshAgents, refreshCurrentTab, refreshTab]);
+
+  useEffect(() => {
+    return () => {
+      if (scrollEndTimerRef.current) {
+        clearTimeout(scrollEndTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (tab !== "agents") {
@@ -137,14 +198,8 @@ export default function App() {
           <PinIcon />
         </button>
         <div className="brand">
-          sidecar
-          <svg className="flower" viewBox="0 0 16 16" aria-hidden="true">
-            <circle cx="8" cy="8" r="2" fill="currentColor" />
-            <circle cx="8" cy="3.2" r="2" fill="currentColor" />
-            <circle cx="8" cy="12.8" r="2" fill="currentColor" />
-            <circle cx="3.2" cy="8" r="2" fill="currentColor" />
-            <circle cx="12.8" cy="8" r="2" fill="currentColor" />
-          </svg>
+          Sidecar
+          <SidecarMark className="flower" />
         </div>
         <button
           className="icon-btn"
@@ -171,7 +226,7 @@ export default function App() {
         />
       </nav>
 
-      <main className="body">
+      <main className="body" onScroll={handleBodyScroll}>
         {error && <div className="empty">{error}</div>}
         {tab === "agents" && (
           <AgentsView
@@ -202,8 +257,13 @@ export default function App() {
           {(["claude", "codex", "cursor"] as const).map((harness) => {
             const status = health?.integrations.find((item) => item.harness === harness)?.status;
             return (
-              <span key={harness} className={status === "ok" ? "ok" : "muted"} title={`${harness}: ${status ?? "unknown"}`}>
-                <i className={`harness ${harness}`} /> {shortHarness(harness)}
+              <span
+                key={harness}
+                className={`integration ${status === "ok" ? "ok" : ""}`}
+                title={`${providerLabel(harness)}: ${status ?? "offline"}`}
+              >
+                <HarnessMark harness={harness} />
+                {harness === "claude" ? "Claude" : providerLabel(harness)}
               </span>
             );
           })}
@@ -268,7 +328,10 @@ function AgentsView({
       )}
       <Section title="Running">
         {filtered.running.length === 0 ? (
-          <div className="empty">No agents running right now.</div>
+          <EmptyState
+            title="No agents running"
+            body="Sidecar is watching Claude Code, Codex, and Cursor on this machine."
+          />
         ) : (
           filtered.running.map((session) => <AgentCard key={session.id} session={session} />)
         )}
@@ -285,22 +348,27 @@ function AgentsView({
 }
 
 function AgentCard({ session, attention = false }: { session: SessionRecord; attention?: boolean }) {
+  const status =
+    session.state === "needs_attention" || session.hasBlocking
+      ? "waiting"
+      : session.isSidechain
+        ? "subagent"
+        : session.state === "active"
+          ? "working"
+          : "idle";
   return (
     <article className={`card ${attention ? "attention" : ""}`}>
+      <div className="agent-card-top">
+        <span className={`harness-badge ${session.harness}`}>
+          <HarnessMark harness={session.harness} />
+          {providerLabel(session.harness)}
+        </span>
+        <span className="agent-time">{relativeTime(session.lastTs)}</span>
+      </div>
       <p className="card-title">{session.activity || session.title || session.nativeId.slice(0, 8)}</p>
       <div className="meta">
-        <i className={`harness ${session.harness}`} />
         <span>{repoLabel(session)}</span>
-        <span>{relativeTime(session.lastTs)}</span>
-        <span>
-          {session.state === "needs_attention"
-            ? "waiting"
-            : session.isSidechain
-              ? "subagent"
-              : session.state === "active"
-                ? "working"
-                : session.harness}
-        </span>
+        <span className={`status-pill ${status}`}>{status}</span>
         <span className={`spin ${session.state === "active" ? "" : "idle"}`} />
       </div>
     </article>
@@ -388,7 +456,12 @@ const SetupView = memo(function SetupView({ items }: { items: SetupItemRecord[] 
           ))}
         </section>
       ))}
-      {visible.length === 0 && <div className="empty">No setup files indexed yet. Ingest first.</div>}
+      {visible.length === 0 && (
+        <EmptyState
+          title="Nothing indexed yet"
+          body="Sidecar reads skills, rules, hooks, and MCP servers from Claude Code, Codex, Cursor, and the other agents on disk."
+        />
+      )}
     </>
   );
 });
@@ -499,58 +572,58 @@ function UsageView({ usage }: { usage: UsageReport | null }) {
     if (!usage) {
       return [];
     }
-    const map = new Map<string, { harness: string; usd: number; tokensIn: number; tokensOut: number }>();
+    const map = new Map<Harness, { harness: Harness; usd: number }>();
     for (const row of usage.days) {
-      const current = map.get(row.harness) ?? { harness: row.harness, usd: 0, tokensIn: 0, tokensOut: 0 };
+      const current = map.get(row.harness) ?? { harness: row.harness, usd: 0 };
       current.usd += row.usdEstimate;
-      current.tokensIn += row.tokensIn;
-      current.tokensOut += row.tokensOut;
       map.set(row.harness, current);
     }
     return [...map.values()];
   }, [usage]);
+  const byDay = usage?.calendarDays.slice(0, 14) ?? [];
 
   if (!usage) {
-    return <div className="empty">Usage appears after ingest.</div>;
+    return (
+      <EmptyState
+        title="Loading usage"
+        body="Reading local token history and live plan windows for Claude Code, Codex, and Cursor."
+      />
+    );
   }
 
   return (
     <>
       <Section title="Plan" />
-      {usage.live.length === 0 && <div className="muted usage-note">Live plan windows appear after a signed-in agent is found.</div>}
+      {usage.live.length === 0 && (
+        <p className="muted usage-note">
+          Live plan windows appear when Claude Code, Codex, or Cursor is already signed in on this Mac.
+        </p>
+      )}
       {usage.live.map((snapshot) => (
         <LiveUsageCard key={snapshot.provider} snapshot={snapshot} />
       ))}
       <Section title="Spend" />
-      <div className="card">
+      <div className="card spend-hero">
         <p className="card-title">{fmtUsd(usage.totals.usdEstimate)}</p>
-        <div className="muted">Last 30 days · {usage.timezone} · price table v{usage.priceVersion}</div>
+        <div className="muted">Last 30 days · {usage.timezone}</div>
       </div>
       {byHarness.map((row) => (
         <div className="usage-row" key={row.harness}>
-          <span className="row">
-            <i className={`harness ${row.harness}`} />
-            {row.harness}
+          <span className={`harness-badge ${row.harness}`}>
+            <HarnessMark harness={row.harness} />
+            {providerLabel(row.harness)}
           </span>
           <span>{fmtUsd(row.usd)}</span>
         </div>
       ))}
       <Section title="By day" />
-      {usage.days
-        .slice()
-        .reverse()
-        .slice(0, 18)
-        .map((row) => (
-          <div className="usage-row" key={`${row.day}-${row.harness}-${row.model}`}>
-            <span>
-              {row.day.slice(5)} · {row.model}
-            </span>
-            <span>{fmtUsd(row.usdEstimate)}</span>
-          </div>
-        ))}
-      {usage.notes.length > 0 && (
-        <p className="muted usage-note">{usage.notes.join(" ")}</p>
-      )}
+      {byDay.map((row) => (
+        <div className="usage-row" key={row.day}>
+          <span>{formatDayLabel(row.day)}</span>
+          <span>{fmtUsd(row.usdEstimate)}</span>
+        </div>
+      ))}
+      {byDay.length === 0 && <div className="muted usage-note">No local token events in this window.</div>}
     </>
   );
 }
@@ -560,8 +633,8 @@ function LiveUsageCard({ snapshot }: { snapshot: LiveUsageSnapshot }) {
   return (
     <div className="card usage-live">
       <div className="usage-live-head">
-        <span className="row">
-          <i className={`harness ${snapshot.provider}`} />
+        <span className={`harness-badge ${snapshot.provider}`}>
+          <HarnessMark harness={snapshot.provider} />
           {providerLabel(snapshot.provider)}
           {snapshot.plan ? <span className="muted">· {snapshot.plan}</span> : null}
         </span>
@@ -577,38 +650,42 @@ function LiveUsageCard({ snapshot }: { snapshot: LiveUsageSnapshot }) {
           <span className="muted">{detail.value}</span>
         </div>
       ))}
-      {snapshot.unofficial && <div className="muted usage-unofficial">Unofficial API</div>}
     </div>
   );
 }
 
 function UsageMeter({ window }: { window: UsageWindow }) {
-  const pct = window.limit > 0 ? Math.min(100, Math.max(0, (window.used / window.limit) * 100)) : 0;
-  const high = pct >= 90;
+  const remainingPct = window.limit > 0 ? clampPct(((window.limit - window.used) / window.limit) * 100) : 0;
+  const low = remainingPct <= 10;
   return (
     <div className="usage-meter-row">
       <div className="usage-row">
         <span>{window.label}</span>
         <span>
-          {formatWindowUsed(window)}
+          {formatWindowRemaining(window)}
           {window.resetsAt ? <span className="muted"> · {fmtReset(window.resetsAt)}</span> : null}
         </span>
       </div>
-      <div className={`usage-meter${high ? " high" : ""}`}>
-        <span style={{ width: `${pct}%` }} />
+      <div className={`usage-meter${low ? " high" : ""}`}>
+        <span style={{ width: `${remainingPct}%` }} />
       </div>
     </div>
   );
 }
 
-function formatWindowUsed(window: UsageWindow): string {
+function clampPct(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+function formatWindowRemaining(window: UsageWindow): string {
+  const remaining = Math.max(0, window.limit - window.used);
   switch (window.unit) {
     case "percent":
-      return `${Math.round(window.used)}%`;
+      return `${Math.round(clampPct(remaining))}% left`;
     case "usd":
-      return `${fmtUsd(window.used)} / ${fmtUsd(window.limit)}`;
+      return `${fmtUsd(remaining)} left of ${fmtUsd(window.limit)}`;
     case "count":
-      return `${Math.round(window.used)} / ${Math.round(window.limit)}`;
+      return `${Math.round(remaining)} left of ${Math.round(window.limit)}`;
     default: {
       const exhaustive: never = window.unit;
       return exhaustive;
@@ -635,10 +712,19 @@ function liveStatusLabel(status: LiveUsageStatus): string {
   }
 }
 
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="empty">
+      <p className="empty-title">{title}</p>
+      <p>{body}</p>
+    </div>
+  );
+}
+
 function providerLabel(harness: Harness): string {
   switch (harness) {
     case "claude":
-      return "Claude";
+      return "Claude Code";
     case "codex":
       return "Codex";
     case "cursor":
@@ -694,8 +780,14 @@ function ImproveView({
         <button className="btn primary" disabled={busy} onClick={onRun} type="button">
           Scan corrections
         </button>
+        <p className="muted usage-note">Looks through Claude Code, Codex, and Cursor transcripts. Nothing leaves this Mac.</p>
       </Section>
-      {suggestions.length === 0 && <div className="empty">Nothing promoted yet. Need 3 distinct sessions.</div>}
+      {suggestions.length === 0 && (
+        <EmptyState
+          title="No rule diffs yet"
+          body="Sidecar promotes a correction after it repeats across three sessions, from any of the agents."
+        />
+      )}
       {suggestions.map((suggestion) => (
         <article className="card" key={suggestion.id}>
           <p className="card-title">{suggestion.targetFile.split("/").slice(-2).join("/")}</p>
@@ -802,71 +894,20 @@ function fmtUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-function shortHarness(harness: "claude" | "codex" | "cursor"): string {
-  switch (harness) {
-    case "claude":
-      return "CC";
-    case "codex":
-      return "Codex";
-    case "cursor":
-      return "Cursor";
-    default: {
-      const never: never = harness;
-      return never;
-    }
+function formatDayLabel(day: string): string {
+  const parts = day.split("-");
+  const year = parts[0];
+  const month = parts[1];
+  const date = parts[2];
+  if (!year || !month || !date) {
+    return day;
   }
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthIndex = Number(month) - 1;
+  const label = months[monthIndex];
+  if (!label) {
+    return day;
+  }
+  return `${date} ${label} ${year}`;
 }
 
-function AgentsIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <rect x="3" y="5" width="10" height="8" rx="2" />
-      <circle cx="6" cy="9" r="0.8" fill="currentColor" />
-      <circle cx="10" cy="9" r="0.8" fill="currentColor" />
-      <path d="M6 3.5h4" />
-    </svg>
-  );
-}
-
-function SetupIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M3 5h10M5 8h8M3 11h10" />
-    </svg>
-  );
-}
-
-function UsageIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <circle cx="8" cy="8" r="5" />
-      <path d="M8 8h4" />
-    </svg>
-  );
-}
-
-function ImproveIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M8 2a4 4 0 0 1 2.5 7c-.4.4-.5.8-.5 1.3V12H6v-1.7c0-.5-.1-.9-.5-1.3A4 4 0 0 1 8 2z" />
-      <path d="M6.5 13h3" />
-    </svg>
-  );
-}
-
-function PinIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M7 15 8.5 9H13l-3-6H6L3 9h4.5L7 15z" />
-    </svg>
-  );
-}
-
-function BellIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
-      <path d="M4 7a4 4 0 0 1 8 0c0 3 1 4 1 4H3s1-1 1-4z" />
-      <path d="M6.5 12.5a1.5 1.5 0 0 0 3 0" />
-    </svg>
-  );
-}
