@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import chokidar from "chokidar";
 import { SidecarService } from "../core/app.js";
 import {
@@ -10,19 +10,27 @@ import {
   cursorStateDb,
   hooksLogPath,
 } from "../core/paths.js";
+import { IngestWorkerClient } from "./ingest-worker-client.js";
 import { createTrayImage } from "./tray-icon.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 700;
+const POLL_INTERVAL_MS = 1000;
+const TRAY_REFRESH_INTERVAL_MS = 5000;
 
 let service: SidecarService | null = null;
+let ingestWorker: IngestWorkerClient | null = null;
 let panel: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let ingestTimer: ReturnType<typeof setTimeout> | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pinned = false;
 let ignoreBlurUntil = 0;
+let refreshInFlight: Promise<void> | null = null;
+let refreshQueued = false;
+let lastSourceSignature = "";
+let lastTrayRefreshAt = 0;
 
 function resolvePreload(): string {
   const candidates = [
@@ -52,7 +60,7 @@ function createPanel(): BrowserWindow {
     hiddenInMissionControl: true,
     roundedCorners: true,
     hasShadow: true,
-    backgroundColor: "#f3eee6",
+    backgroundColor: "#f4efe6",
     webPreferences: {
       preload: resolvePreload(),
       contextIsolation: true,
@@ -134,10 +142,20 @@ function getService(): SidecarService {
   return service;
 }
 
+function getIngestWorker(): IngestWorkerClient {
+  if (!ingestWorker) {
+    const workerUrl = app.isPackaged
+      ? pathToFileURL(path.join(process.resourcesPath, "app.asar.unpacked", "out/main/ingest-worker.js"))
+      : new URL("./ingest-worker.js", import.meta.url);
+    ingestWorker = new IngestWorkerClient(workerUrl);
+  }
+  return ingestWorker;
+}
+
 function bindIpc(): void {
   const svc = getService();
   ipcMain.handle("sidecar:health", () => svc.health());
-  ipcMain.handle("sidecar:ingest", () => svc.ingest());
+  ipcMain.handle("sidecar:ingest", () => getIngestWorker().ingest());
   ipcMain.handle("sidecar:usage", (_event, days?: number) => svc.usage(days));
   ipcMain.handle("sidecar:sessions", () => svc.sessions());
   ipcMain.handle("sidecar:setup", () => svc.setup());
@@ -166,17 +184,61 @@ function scheduleIngest(): void {
   }
   ingestTimer = setTimeout(() => {
     void refreshFromDisk();
-  }, 400);
+  }, 150);
 }
 
 async function refreshFromDisk(): Promise<void> {
+  if (refreshInFlight) {
+    refreshQueued = true;
+    return refreshInFlight;
+  }
+  refreshInFlight = runRefresh();
   try {
-    await getService().ingest();
+    await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
+  if (refreshQueued) {
+    refreshQueued = false;
+    await refreshFromDisk();
+  }
+}
+
+async function runRefresh(): Promise<void> {
+  try {
+    await getIngestWorker().ingest();
     await updateTrayBadge();
     panel?.webContents.send("sidecar:changed");
   } catch (error) {
     console.error(error);
   }
+}
+
+function pollSources(): void {
+  const signature = sourceSignature();
+  const changed = signature !== lastSourceSignature;
+  lastSourceSignature = signature;
+  if (changed) {
+    void refreshFromDisk();
+    return;
+  }
+  if (Date.now() - lastTrayRefreshAt >= TRAY_REFRESH_INTERVAL_MS) {
+    lastTrayRefreshAt = Date.now();
+    void updateTrayBadge();
+  }
+}
+
+function sourceSignature(): string {
+  const parts: string[] = [];
+  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksLogPath()]) {
+    try {
+      const stat = fs.statSync(filePath);
+      parts.push(`${stat.size}:${stat.mtimeMs}`);
+    } catch {
+      parts.push("-");
+    }
+  }
+  return parts.join("|");
 }
 
 async function updateTrayBadge(): Promise<void> {
@@ -202,7 +264,7 @@ function watchSources(): void {
       ignoreInitial: true,
       ignorePermissionErrors: true,
       ignored: (filePath) => shouldIgnoreWatchPath(filePath),
-      awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 80 },
+      awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 50 },
     },
   );
   watcher.on("error", (error) => {
@@ -265,24 +327,16 @@ if (!gotLock) {
     panel = createPanel();
     createTray();
     watchSources();
+    lastSourceSignature = sourceSignature();
     setTimeout(() => {
       void refreshFromDisk();
-    }, 1500);
-    pollTimer = setInterval(() => {
-      void updateTrayBadge();
-      if (panel?.isVisible()) {
-        panel.webContents.send("sidecar:changed");
-      }
-    }, 5000);
+    }, 400);
+    pollTimer = setInterval(pollSources, POLL_INTERVAL_MS);
     app.on("activate", () => {
       togglePanel();
     });
   });
 }
-
-app.on("window-all-closed", () => {
-  // Tray app — staying alive until Quit Sidecar.
-});
 
 app.on("before-quit", () => {
   if (pollTimer) {
@@ -293,6 +347,8 @@ app.on("before-quit", () => {
     panel.destroy();
     panel = null;
   }
+  ingestWorker?.close();
+  ingestWorker = null;
 });
 
 app.on("quit", () => {
