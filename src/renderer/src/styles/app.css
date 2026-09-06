@@ -647,3 +647,12 @@ pre {
 .hook-actions {
   margin: 10px 0 2px;
 }
+
+.card-actions {
+  margin-top: 8px;
+}
+
+.card-note {
+  margin: 6px 0 0;
+  color: var(--danger);
+}

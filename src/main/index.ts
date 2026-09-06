@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +8,9 @@ import { cursorStateDb, hooksSpoolDir } from "../core/paths.js";
 import { IngestWorkerClient } from "./ingest-worker-client.js";
 import { createTrayImage } from "./tray-icon.js";
 import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
+import { editorCandidates, existingDir, findExecutable, launch } from "./open-in.js";
+import { attentionIds, needsYou, newlyNeedingYou } from "./attention.js";
+import type { OpenResult, SessionRecord } from "../shared/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_WIDTH = 400;
@@ -15,6 +18,8 @@ const PANEL_HEIGHT = 700;
 const POLL_INTERVAL_MS = 1000;
 const TRAY_REFRESH_INTERVAL_MS = 5000;
 const FALLBACK_INGEST_MS = 30_000;
+// A batch ingest can flip several sessions at once; three banners is already plenty.
+const MAX_NOTIFICATIONS_PER_REFRESH = 3;
 
 let service: SidecarService | null = null;
 let ingestWorker: IngestWorkerClient | null = null;
@@ -29,6 +34,7 @@ let refreshQueued = false;
 let lastSourceSignature = "";
 let lastTrayRefreshAt = 0;
 let lastIngestAt = 0;
+let attentionSeen: Set<string> | null = null;
 
 function resolvePreload(): string {
   const candidates = [
@@ -177,6 +183,8 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:quitApp", () => {
     app.quit();
   });
+  ipcMain.handle("sidecar:openInEditor", (_event, session: SessionRecord) => openInEditor(session));
+  ipcMain.handle("sidecar:openInTerminal", (_event, session: SessionRecord) => openInTerminal(session));
 }
 
 function scheduleIngest(): void {
@@ -249,13 +257,76 @@ function sourceSignature(): string {
 }
 
 async function updateTrayBadge(): Promise<void> {
+  const sessions = await getService().sessions();
+  const attention = sessions.filter(needsYou);
+  notifyAttention(sessions);
   if (!tray) {
     return;
   }
-  const sessions = await getService().sessions();
-  const attention = sessions.filter((session) => session.state === "needs_attention" || session.hasBlocking).length;
-  tray.setToolTip(attention > 0 ? `Sidecar — ${attention} need you` : "Sidecar");
-  tray.setTitle(attention > 0 ? String(attention) : "");
+  tray.setToolTip(attention.length > 0 ? `Sidecar — ${attention.length} need you` : "Sidecar");
+  tray.setTitle(attention.length > 0 ? String(attention.length) : "");
+}
+
+function notifyAttention(sessions: SessionRecord[]): void {
+  const previous = attentionSeen;
+  attentionSeen = attentionIds(sessions);
+  if (!Notification.isSupported()) {
+    return;
+  }
+  for (const session of newlyNeedingYou(previous, sessions, MAX_NOTIFICATIONS_PER_REFRESH)) {
+    const notification = new Notification({
+      title: `${harnessLabel(session.harness)} ${session.hasBlocking ? "needs permission" : "is waiting on you"}`,
+      body: session.activity || session.title || repoName(session.cwd) || session.nativeId.slice(0, 8),
+    });
+    notification.on("click", () => {
+      if (!panel?.isVisible()) {
+        togglePanel();
+      }
+    });
+    notification.show();
+  }
+}
+
+function harnessLabel(harness: SessionRecord["harness"]): string {
+  return harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : "Cursor";
+}
+
+function repoName(cwd: string | null): string | null {
+  return cwd?.split("/").filter(Boolean).at(-1) ?? null;
+}
+
+async function openInEditor(session: SessionRecord): Promise<OpenResult> {
+  const dir = existingDir(session.cwd);
+  if (!dir) {
+    return { ok: false, opened: null, error: "This session has no folder on this Mac." };
+  }
+  for (const name of editorCandidates(session.harness)) {
+    const command = findExecutable(name);
+    if (command) {
+      launch(command, [dir]);
+      return { ok: true, opened: path.basename(command), error: null };
+    }
+  }
+  const failure = await shell.openPath(dir);
+  return failure
+    ? { ok: false, opened: null, error: failure }
+    : { ok: true, opened: "Finder", error: null };
+}
+
+async function openInTerminal(session: SessionRecord): Promise<OpenResult> {
+  const dir = existingDir(session.cwd);
+  if (!dir) {
+    return { ok: false, opened: null, error: "This session has no folder on this Mac." };
+  }
+  if (process.platform !== "darwin") {
+    const failure = await shell.openPath(dir);
+    return failure
+      ? { ok: false, opened: null, error: failure }
+      : { ok: true, opened: "file manager", error: null };
+  }
+  const terminal = process.env.SIDECAR_TERMINAL?.trim() || "Terminal";
+  launch("/usr/bin/open", ["-a", terminal, dir]);
+  return { ok: true, opened: terminal, error: null };
 }
 
 function watchSources(): void {

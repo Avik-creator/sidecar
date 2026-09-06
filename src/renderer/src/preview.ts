@@ -22,6 +22,8 @@ function previewShell(): SidecarShell {
     setPinned: async () => undefined,
     hidePanel: async () => undefined,
     quitApp: async () => undefined,
+    openInEditor: async () => ({ ok: true, opened: "code", error: null }),
+    openInTerminal: async () => ({ ok: true, opened: "Terminal", error: null }),
   };
 }
 

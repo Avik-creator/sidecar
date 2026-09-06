@@ -7,6 +7,7 @@ import type {
   HookStatus,
   LiveUsageSnapshot,
   LiveUsageStatus,
+  OpenResult,
   SessionRecord,
   SetupItemRecord,
   SetupKind,
@@ -417,6 +418,7 @@ function joinLabels(labels: string[]): string {
 }
 
 function AgentCard({ session, attention = false }: { session: SessionRecord; attention?: boolean }) {
+  const [note, setNote] = useState<string | null>(null);
   const status =
     session.state === "needs_attention" || session.hasBlocking
       ? "waiting"
@@ -442,8 +444,28 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
         <span className={`status-pill ${status}`}>{status}</span>
         <span className={`spin ${session.state === "active" ? "" : "idle"}`} />
       </div>
+      {session.cwd && (
+        <div className="row card-actions">
+          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>
+            Editor
+          </button>
+          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInTerminal)}>
+            Terminal
+          </button>
+        </div>
+      )}
+      {note && <p className="muted card-note">{note}</p>}
     </article>
   );
+
+  async function openWith(open: (target: SessionRecord) => Promise<OpenResult>): Promise<void> {
+    try {
+      const result = await open(session);
+      setNote(result.ok ? null : (result.error ?? "Could not open this session."));
+    } catch (error) {
+      setNote(String(error));
+    }
+  }
 }
 
 const SetupView = memo(function SetupView({

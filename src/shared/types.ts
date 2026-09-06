@@ -279,4 +279,12 @@ export interface SidecarShell {
   setPinned: (pinned: boolean) => Promise<void>;
   hidePanel: () => Promise<void>;
   quitApp: () => Promise<void>;
+  openInEditor: (session: SessionRecord) => Promise<OpenResult>;
+  openInTerminal: (session: SessionRecord) => Promise<OpenResult>;
+}
+
+export interface OpenResult {
+  ok: boolean;
+  opened: string | null;
+  error: string | null;
 }

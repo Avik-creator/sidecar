@@ -23,6 +23,8 @@ const shellApi: SidecarShell = {
   setPinned: (pinned) => ipcRenderer.invoke("sidecar:setPinned", pinned),
   hidePanel: () => ipcRenderer.invoke("sidecar:hidePanel"),
   quitApp: () => ipcRenderer.invoke("sidecar:quitApp"),
+  openInEditor: (session) => ipcRenderer.invoke("sidecar:openInEditor", session),
+  openInTerminal: (session) => ipcRenderer.invoke("sidecar:openInTerminal", session),
 };
 
 contextBridge.exposeInMainWorld("sidecar", api);
