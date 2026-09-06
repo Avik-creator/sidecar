@@ -25,10 +25,18 @@ import {
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const LIVE_CACHE_VERSION = 2;
-const REFRESH_SKEW_MS = 60_000;
-const CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const CURSOR_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
+// Sidecar reads the agents' tokens but never renews them: refreshing can rotate
+// the stored token and sign the user out of their own agent.
+const EXPIRY_SKEW_MS = 60_000;
+
+function EXPIRED_NOTE(agent: string): string {
+  return `${agent}'s sign-in has expired. Open ${agent} to renew it.`;
+}
+
+function isExpired(tokens: OAuthTokens, now: number): boolean {
+  const expiry = tokens.expiresAtMs ?? jwtExpiryMs(tokens.accessToken);
+  return expiry != null && expiry - EXPIRY_SKEW_MS <= now;
+}
 const LIVE_NOTE = "Sidecar never writes your agent credentials.";
 
 interface LiveUsageDeps {
@@ -147,9 +155,12 @@ function stampFetchedAt(snapshot: LiveUsageSnapshot, now: number): LiveUsageSnap
 
 async function probeClaude(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
   const previous = memoryCache.get("claude")?.snapshot;
-  const tokens = await ensureFresh(deps.readClaude(), (current) => refreshClaude(deps, current), deps.now());
+  const tokens = deps.readClaude();
   if (!tokens?.accessToken) {
     return emptySnapshot("claude", "unauthenticated", "Claude Code is not signed in");
+  }
+  if (isExpired(tokens, deps.now())) {
+    return emptySnapshot("claude", "unauthenticated", EXPIRED_NOTE("Claude Code"));
   }
   if (tokens.accessToken.startsWith("sk-ant-api")) {
     return emptySnapshot("claude", "unavailable", "Claude API keys cannot fetch live plan usage");
@@ -171,16 +182,8 @@ async function probeClaude(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
     const sidecarUa = deps.sidecarUserAgent;
     const compatibilityUa = deps.claudeCodeUserAgent;
     let userAgent = claudeUserAgent ?? sidecarUa;
-    let tokensNow = tokens;
+    const tokensNow = tokens;
     let response = await requestUsage(tokensNow.accessToken, userAgent);
-
-    if (isAuthStatus(response.status) && tokensNow.refreshToken) {
-      const refreshed = await refreshClaude(deps, tokensNow);
-      if (refreshed?.accessToken) {
-        tokensNow = refreshed;
-        response = await requestUsage(tokensNow.accessToken, userAgent);
-      }
-    }
 
     if (response.status === 429 && userAgent === sidecarUa) {
       userAgent = compatibilityUa;
@@ -207,24 +210,20 @@ async function probeClaude(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
 
 async function probeCodex(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
   const previous = memoryCache.get("codex")?.snapshot;
-  const tokens = await ensureFresh(deps.readCodex(), (current) => refreshCodex(deps, current), deps.now());
+  const tokens = deps.readCodex();
   if (!tokens?.accessToken) {
     return emptySnapshot("codex", "unauthenticated", "Codex is not signed in");
+  }
+  if (isExpired(tokens, deps.now())) {
+    return emptySnapshot("codex", "unauthenticated", EXPIRED_NOTE("Codex"));
   }
   if (!looksLikeJwt(tokens.accessToken)) {
     return emptySnapshot("codex", "unavailable", "Codex API keys cannot fetch live plan usage");
   }
 
   try {
-    let tokensNow = tokens;
-    let response = await requestCodexUsage(deps, tokensNow);
-    if (isAuthStatus(response.status) && tokensNow.refreshToken) {
-      const refreshed = await refreshCodex(deps, tokensNow);
-      if (refreshed?.accessToken) {
-        tokensNow = refreshed;
-        response = await requestCodexUsage(deps, tokensNow);
-      }
-    }
+    const tokensNow = tokens;
+    const response = await requestCodexUsage(deps, tokensNow);
     if (response.status === 429) {
       return rateLimited("codex", previous, response.headers, deps.now());
     }
@@ -255,33 +254,19 @@ async function probeCodex(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
 
 async function probeCursor(deps: LiveUsageDeps): Promise<LiveUsageSnapshot> {
   const previous = memoryCache.get("cursor")?.snapshot;
-  const tokens = await ensureFresh(deps.readCursor(), (current) => refreshCursor(deps, current), deps.now());
-  if (!tokens || (!tokens.accessToken && !tokens.refreshToken)) {
+  const tokens = deps.readCursor();
+  if (!tokens?.accessToken) {
     return emptySnapshot("cursor", "unauthenticated", "Cursor is not signed in");
   }
+  if (isExpired(tokens, deps.now())) {
+    return emptySnapshot("cursor", "unauthenticated", EXPIRED_NOTE("Cursor"));
+  }
   try {
-    let tokensNow = tokens;
-    if (!tokensNow.accessToken && tokensNow.refreshToken) {
-      const refreshed = await refreshCursor(deps, tokensNow);
-      if (refreshed) {
-        tokensNow = refreshed;
-      }
-    }
-    if (!tokensNow.accessToken) {
-      return emptySnapshot("cursor", "unauthenticated", "Cursor is not signed in");
-    }
-
+    const tokensNow = tokens;
     const fetchedAt = () => new Date(deps.now()).toISOString();
     const call = (token: string) => requestCursorDashboard(deps, token);
 
-    let usageResponse = await call(tokensNow.accessToken);
-    if (isAuthStatus(usageResponse.status) && tokensNow.refreshToken) {
-      const refreshed = await refreshCursor(deps, tokensNow);
-      if (refreshed?.accessToken) {
-        tokensNow = refreshed;
-        usageResponse = await call(tokensNow.accessToken);
-      }
-    }
+    const usageResponse = await call(tokensNow.accessToken);
     if (usageResponse.status === 429) {
       return rateLimited("cursor", previous, usageResponse.headers, deps.now());
     }
@@ -438,119 +423,6 @@ async function withCursorCredits(
   } catch {
     return snapshot;
   }
-}
-
-async function ensureFresh(
-  tokens: OAuthTokens | null,
-  refresh: (current: OAuthTokens) => Promise<OAuthTokens | null>,
-  now: number,
-): Promise<OAuthTokens | null> {
-  if (!tokens) {
-    return null;
-  }
-  const expiry = tokens.expiresAtMs ?? jwtExpiryMs(tokens.accessToken);
-  if (expiry != null && expiry - REFRESH_SKEW_MS <= now && tokens.refreshToken) {
-    return (await refresh(tokens)) ?? tokens;
-  }
-  return tokens;
-}
-
-async function refreshClaude(deps: LiveUsageDeps, tokens: OAuthTokens): Promise<OAuthTokens | null> {
-  if (!tokens.refreshToken) {
-    return null;
-  }
-  try {
-    const response = await deps.request({
-      method: "POST",
-      url: "https://platform.claude.com/v1/oauth/token",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": deps.sidecarUserAgent,
-      },
-      bodyText: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: tokens.refreshToken,
-        client_id: CLAUDE_CLIENT_ID,
-      }),
-    });
-    if (response.status < 200 || response.status >= 300) {
-      return null;
-    }
-    return tokensFromRefresh(parseJsonBody(response.bodyText), tokens, deps.now());
-  } catch {
-    return null;
-  }
-}
-
-async function refreshCodex(deps: LiveUsageDeps, tokens: OAuthTokens): Promise<OAuthTokens | null> {
-  if (!tokens.refreshToken) {
-    return null;
-  }
-  try {
-    const response = await deps.request({
-      method: "POST",
-      url: "https://auth.openai.com/oauth/token",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": deps.sidecarUserAgent,
-      },
-      bodyText: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokens.refreshToken,
-        client_id: CODEX_CLIENT_ID,
-      }).toString(),
-    });
-    if (response.status < 200 || response.status >= 300) {
-      return null;
-    }
-    return tokensFromRefresh(parseJsonBody(response.bodyText), tokens, deps.now());
-  } catch {
-    return null;
-  }
-}
-
-async function refreshCursor(deps: LiveUsageDeps, tokens: OAuthTokens): Promise<OAuthTokens | null> {
-  if (!tokens.refreshToken) {
-    return null;
-  }
-  try {
-    const response = await deps.request({
-      method: "POST",
-      url: "https://api2.cursor.sh/oauth/token",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": deps.sidecarUserAgent,
-      },
-      bodyText: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokens.refreshToken,
-        client_id: CURSOR_CLIENT_ID,
-      }).toString(),
-    });
-    if (response.status < 200 || response.status >= 300) {
-      return null;
-    }
-    return tokensFromRefresh(parseJsonBody(response.bodyText), tokens, deps.now());
-  } catch {
-    return null;
-  }
-}
-
-function tokensFromRefresh(body: unknown, previous: OAuthTokens, now: number): OAuthTokens | null {
-  const rec = asRecord(body);
-  const accessToken = asString(rec?.access_token) ?? asString(rec?.accessToken);
-  if (!accessToken) {
-    return null;
-  }
-  const expiresIn = typeof rec?.expires_in === "number" ? rec.expires_in : null;
-  const expiresAt = typeof rec?.expires_at === "number" ? rec.expires_at : typeof rec?.expiresAt === "number" ? rec.expiresAt : null;
-  return {
-    ...previous,
-    accessToken,
-    refreshToken: asString(rec?.refresh_token) ?? asString(rec?.refreshToken) ?? previous.refreshToken,
-    expiresAtMs: expiresAt ?? (expiresIn != null ? now + expiresIn * 1000 : previous.expiresAtMs),
-    accountId: chatgptAccountId(accessToken, previous.accountId),
-  };
 }
 
 function rateLimited(
