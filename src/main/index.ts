@@ -4,20 +4,17 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import chokidar from "chokidar";
 import { SidecarService } from "../core/app.js";
-import {
-  claudeProjectsDir,
-  codexSessionsDir,
-  cursorStateDb,
-  hooksLogPath,
-} from "../core/paths.js";
+import { cursorStateDb, hooksSpoolDir } from "../core/paths.js";
 import { IngestWorkerClient } from "./ingest-worker-client.js";
 import { createTrayImage } from "./tray-icon.js";
+import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 700;
 const POLL_INTERVAL_MS = 1000;
 const TRAY_REFRESH_INTERVAL_MS = 5000;
+const FALLBACK_INGEST_MS = 30_000;
 
 let service: SidecarService | null = null;
 let ingestWorker: IngestWorkerClient | null = null;
@@ -31,6 +28,7 @@ let refreshInFlight: Promise<void> | null = null;
 let refreshQueued = false;
 let lastSourceSignature = "";
 let lastTrayRefreshAt = 0;
+let lastIngestAt = 0;
 
 function resolvePreload(): string {
   const candidates = [
@@ -207,6 +205,7 @@ async function refreshFromDisk(): Promise<void> {
 async function runRefresh(): Promise<void> {
   try {
     await getIngestWorker().ingest();
+    lastIngestAt = Date.now();
     await updateTrayBadge();
     panel?.webContents.send("sidecar:changed");
   } catch (error) {
@@ -222,6 +221,11 @@ function pollSources(): void {
     void refreshFromDisk();
     return;
   }
+  // Safety net for anything the watcher misses (network volumes, dropped FSEvents).
+  if (Date.now() - lastIngestAt >= FALLBACK_INGEST_MS) {
+    void refreshFromDisk();
+    return;
+  }
   if (Date.now() - lastTrayRefreshAt >= TRAY_REFRESH_INTERVAL_MS) {
     lastTrayRefreshAt = Date.now();
     void updateTrayBadge();
@@ -230,7 +234,7 @@ function pollSources(): void {
 
 function sourceSignature(): string {
   const parts: string[] = [];
-  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksLogPath()]) {
+  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksSpoolDir()]) {
     try {
       const stat = fs.statSync(filePath);
       parts.push(`${stat.size}:${stat.mtimeMs}`);
@@ -252,26 +256,20 @@ async function updateTrayBadge(): Promise<void> {
 }
 
 function watchSources(): void {
-  const watcher = chokidar.watch(
-    [
-      path.join(claudeProjectsDir(), "**/*.jsonl"),
-      path.join(codexSessionsDir(), "**/*.jsonl"),
-      cursorStateDb(),
-      `${cursorStateDb()}-wal`,
-      hooksLogPath(),
-    ],
-    {
-      ignoreInitial: true,
-      ignorePermissionErrors: true,
-      ignored: (filePath) => shouldIgnoreWatchPath(filePath),
-      awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 50 },
-    },
-  );
+  const paths = watchPaths();
+  const watcher = chokidar.watch(watchRoots(paths), {
+    ignoreInitial: true,
+    ignorePermissionErrors: true,
+    ignored: (filePath) => shouldIgnoreWatchPath(filePath),
+    awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 50 },
+  });
   watcher.on("error", (error) => {
     console.warn("watch error", error);
   });
-  watcher.on("all", () => {
-    scheduleIngest();
+  watcher.on("all", (_event, changed) => {
+    if (isRelevantChange(changed, paths)) {
+      scheduleIngest();
+    }
   });
   app.on("before-quit", () => {
     void watcher.close();
