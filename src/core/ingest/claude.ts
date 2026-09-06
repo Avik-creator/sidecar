@@ -1,29 +1,20 @@
-import type { Harness, SessionRecord, TurnRecord, UsageEventRecord } from "../../shared/types.js";
+import type { SessionRecord, TurnRecord, UsageEventRecord } from "../../shared/types.js";
 import { asBool, asNumber, asRecord, asString, extractText, truncateText } from "../text.js";
 
 export interface ParsedBatch {
   sessions: SessionRecord[];
   turns: TurnRecord[];
   usage: UsageEventRecord[];
-  events: Array<{
-    sessionId: string | null;
-    harness: Harness;
-    type: string;
-    ts: string;
-    payloadJson: string;
-    sourceEventId: string;
-  }>;
 }
 
 export function emptyBatch(): ParsedBatch {
-  return { sessions: [], turns: [], usage: [], events: [] };
+  return { sessions: [], turns: [], usage: [] };
 }
 
 export function mergeBatch(into: ParsedBatch, extra: ParsedBatch): void {
   into.sessions.push(...extra.sessions);
   into.turns.push(...extra.turns);
   into.usage.push(...extra.usage);
-  into.events.push(...extra.events);
 }
 
 export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "skip" | "fail" {
@@ -115,17 +106,6 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     }
   }
 
-  if (type !== "user" && type !== "assistant") {
-    batch.events.push({
-      sessionId: id,
-      harness: "claude",
-      type,
-      ts,
-      payloadJson: compactPayload(rec),
-      sourceEventId: asString(rec.uuid) ?? `${type}:${ts}`,
-    });
-  }
-
   return batch;
 }
 
@@ -171,15 +151,4 @@ function sessionIdFromPath(filePath: string): string | null {
     return base.slice(0, -".jsonl".length);
   }
   return null;
-}
-
-function compactPayload(rec: Record<string, unknown>): string {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(rec)) {
-    if (key === "message" || key === "content" || key === "snapshot" || key === "attachment") {
-      continue;
-    }
-    copy[key] = value;
-  }
-  return JSON.stringify(copy);
 }

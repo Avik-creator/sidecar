@@ -1,11 +1,10 @@
 import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import type { SourceFileState } from "../db/store.js";
 import { MAX_JSONL_LINE, PARSER_VERSION } from "../constants.js";
 import type { Harness } from "../../shared/types.js";
 
-interface JsonlLine {
-  text: string;
-}
+const READ_CHUNK_BYTES = 1024 * 1024;
 
 interface FileIdentity {
   inode: string;
@@ -42,43 +41,54 @@ export function resumeOffset(previous: SourceFileState | undefined, identity: Fi
   return previous.byteOffset;
 }
 
-export function readJsonlFromOffset(filePath: string, startOffset: number): {
-  lines: JsonlLine[];
-  nextOffset: number;
-  failures: number;
-} {
+// Streams a chunk at a time; a cold ingest reads transcripts far larger than we want resident.
+export function readJsonlFromOffset(
+  filePath: string,
+  startOffset: number,
+  onLine: (text: string) => void,
+): { nextOffset: number; failures: number } {
   const fd = fs.openSync(filePath, "r");
   try {
     const stat = fs.fstatSync(fd);
     if (startOffset > stat.size) {
-      return { lines: [], nextOffset: 0, failures: 0 };
+      return { nextOffset: 0, failures: 0 };
     }
-    const length = stat.size - startOffset;
-    if (length <= 0) {
-      return { lines: [], nextOffset: startOffset, failures: 0 };
+    let remaining = stat.size - startOffset;
+    if (remaining <= 0) {
+      return { nextOffset: startOffset, failures: 0 };
     }
-    const buffer = Buffer.alloc(length);
-    fs.readSync(fd, buffer, 0, length, startOffset);
-    const chunk = buffer.toString("utf8");
-    const parts = chunk.split("\n");
-    const complete = parts.slice(0, -1);
-    const remainder = chunk.endsWith("\n") ? "" : (parts.at(-1) ?? "");
-    const lines: JsonlLine[] = [];
+    const buffer = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, remaining));
+    const decoder = new StringDecoder("utf8");
+    let position = startOffset;
     let cursor = startOffset;
     let failures = 0;
-    for (const part of complete) {
-      const recordBytes = Buffer.byteLength(part, "utf8") + 1;
-      if (part.length > MAX_JSONL_LINE) {
-        failures += 1;
-        cursor += recordBytes;
-        continue;
+    let pending = "";
+
+    while (remaining > 0) {
+      const read = fs.readSync(fd, buffer, 0, Math.min(buffer.length, remaining), position);
+      if (read <= 0) {
+        break;
       }
-      if (part.trim().length > 0) {
-        lines.push({ text: part });
+      position += read;
+      remaining -= read;
+      pending += decoder.write(buffer.subarray(0, read));
+      let from = 0;
+      let newline = pending.indexOf("\n", from);
+      while (newline >= 0) {
+        const part = pending.slice(from, newline);
+        cursor += Buffer.byteLength(part, "utf8") + 1;
+        if (part.length > MAX_JSONL_LINE) {
+          failures += 1;
+        } else if (part.trim().length > 0) {
+          onLine(part);
+        }
+        from = newline + 1;
+        newline = pending.indexOf("\n", from);
       }
-      cursor += recordBytes;
+      pending = from > 0 ? pending.slice(from) : pending;
     }
-    return { lines, nextOffset: cursor, failures: remainder.length > MAX_JSONL_LINE ? failures + 1 : failures };
+    // A trailing partial line stays unread until its newline arrives.
+    return { nextOffset: cursor, failures: pending.length > MAX_JSONL_LINE ? failures + 1 : failures };
   } finally {
     fs.closeSync(fd);
   }

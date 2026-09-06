@@ -221,29 +221,6 @@ export class Store {
     return Number(result.changes) > 0;
   }
 
-  insertEvent(event: {
-    sessionId: string | null;
-    harness: Harness;
-    type: string;
-    ts: string;
-    payloadJson: string;
-    sourceEventId: string;
-  }): void {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO event(session_id, harness, type, ts, payload_json, source_event_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.sessionId,
-        event.harness,
-        event.type,
-        event.ts,
-        event.payloadJson,
-        event.sourceEventId,
-      );
-  }
-
   replaceCandidates(rows: Array<{ turnId: string; signals: string[]; score: number; createdAt: string }>): void {
     this.db.exec("DELETE FROM candidate");
     const stmt = this.db.prepare(

@@ -4,6 +4,8 @@ import { SCHEMA_SQL } from "./schema.js";
 interface Migration {
   version: number;
   statements: string[];
+  // VACUUM cannot run inside a transaction, so it happens after the commit.
+  vacuum?: boolean;
 }
 
 // Version 1 is the baseline schema. Later versions only add to it.
@@ -14,6 +16,11 @@ const MIGRATIONS: Migration[] = [
       `ALTER TABLE session ADD COLUMN hook_ts TEXT`,
       `ALTER TABLE session ADD COLUMN hook_event TEXT`,
     ],
+  },
+  {
+    version: 3,
+    statements: [`DROP TABLE IF EXISTS event`],
+    vacuum: true,
   },
 ];
 
@@ -48,6 +55,9 @@ export function migrate(db: DatabaseSync): void {
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
+    }
+    if (migration.vacuum) {
+      db.exec("VACUUM");
     }
   }
 }

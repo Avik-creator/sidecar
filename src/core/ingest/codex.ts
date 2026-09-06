@@ -35,18 +35,6 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
       hasBlocking: false,
       isSidechain: asString(payload.thread_source) === "subagent",
     });
-    batch.events.push({
-      sessionId,
-      harness: "codex",
-      type: "session_meta",
-      ts,
-      payloadJson: JSON.stringify({
-        cwd: payload.cwd,
-        model_provider: payload.model_provider,
-        originator: payload.originator,
-      }),
-      sourceEventId: `session_meta:${nativeId}`,
-    });
     return batch;
   }
 
@@ -114,14 +102,6 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
   if (type === "event_msg") {
     const resolvedEventType = eventType ?? "event_msg";
     const sourceEventId = `${resolvedEventType}:${ts}:${shortHash(line).slice(0, 12)}`;
-    batch.events.push({
-      sessionId,
-      harness: "codex",
-      type: resolvedEventType,
-      ts,
-      payloadJson: compactEvent(payload),
-      sourceEventId,
-    });
     if (resolvedEventType === "token_count") {
       const info = asRecord(payload.info);
       const last = asRecord(info?.last_token_usage);
@@ -197,15 +177,4 @@ function mapCodexRole(role: string | null): TurnRecord["role"] | null {
     default:
       return null;
   }
-}
-
-function compactEvent(payload: Record<string, unknown>): string {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload)) {
-    if (key === "message" || key === "text" || key === "content") {
-      continue;
-    }
-    copy[key] = value;
-  }
-  return JSON.stringify(copy);
 }

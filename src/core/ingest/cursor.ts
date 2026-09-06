@@ -9,20 +9,23 @@ function asRows<T>(value: unknown): T {
 }
 
 interface CursorIngestResult {
-  batch: ParsedBatch;
   watermark: string;
   parseFailures: number;
   unavailable: boolean;
   error?: string;
 }
 
-export function ingestCursor(dbPath: string, watermark: string | null): CursorIngestResult {
+// Emits one batch per conversation; the bubble table holds tens of thousands of rows.
+export function ingestCursor(
+  dbPath: string,
+  watermark: string | null,
+  onBatch: (batch: ParsedBatch) => void,
+): CursorIngestResult {
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
   } catch (error) {
     return {
-      batch: emptyBatch(),
       watermark: watermark ?? "0",
       parseFailures: 0,
       unavailable: true,
@@ -44,10 +47,9 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
         .all(Number.isFinite(since) ? since : 0),
     );
 
-    const batch = emptyBatch();
     let parseFailures = 0;
     let maxRecency = Number.isFinite(since) ? since : 0;
-    const sessions = new Map<string, SessionRecord>();
+    const bubbles = db.prepare(`SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?`);
 
     for (const header of headers) {
       const recency = Number(header.recency ?? header.lastUpdatedAt ?? header.createdAt ?? 0);
@@ -77,25 +79,16 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
         hasBlocking: false,
         isSidechain: header.isSubagent === 1,
       };
-      sessions.set(header.composerId, session);
-      batch.sessions.push(session);
-    }
 
-    const bubbles = loadBubbles(db, headers);
-    for (const bubble of bubbles) {
-      const composerId = bubble.key.split(":")[1];
-      if (!composerId || !sessions.has(composerId)) {
-        continue;
-      }
-      try {
-        const parsed = decodeBlob(bubble.value);
-        const turn = bubbleToTurn(
-          `cursor:${composerId}`,
-          bubble.key,
-          parsed,
-          sessions.get(composerId)?.isSidechain ?? false,
-        );
-        if (turn) {
+      const batch = emptyBatch();
+      batch.sessions.push(session);
+      const [low, high] = keyRange(`bubbleId:${header.composerId}:`);
+      for (const bubble of bubbles.iterate(low, high) as Iterable<{ key: string; value: unknown }>) {
+        try {
+          const turn = bubbleToTurn(session.id, bubble.key, decodeBlob(bubble.value), session.isSidechain);
+          if (!turn) {
+            continue;
+          }
           batch.turns.push(turn);
           if (turn.tokensIn || turn.tokensOut) {
             batch.usage.push({
@@ -111,35 +104,25 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
               cacheWrite: turn.cacheWrite,
             });
           }
+        } catch {
+          parseFailures += 1;
         }
-      } catch {
-        parseFailures += 1;
       }
-    }
 
-    const latestTurn = new Map<string, string>();
-    for (const turn of batch.turns) {
-      const current = latestTurn.get(turn.sessionId);
-      if (!current || turn.ts > current) {
-        latestTurn.set(turn.sessionId, turn.ts);
+      const latest = batch.turns.reduce((max, turn) => (turn.ts > max ? turn.ts : max), "");
+      if (latest) {
+        session.lastTs = latest;
       }
-    }
-    for (const session of batch.sessions) {
-      const turnTs = latestTurn.get(session.id);
-      if (turnTs) {
-        session.lastTs = turnTs;
-      }
+      onBatch(batch);
     }
 
     return {
-      batch,
       watermark: String(maxRecency),
       parseFailures,
       unavailable: false,
     };
   } catch (error) {
     return {
-      batch: emptyBatch(),
       watermark: watermark ?? "0",
       parseFailures: 0,
       unavailable: true,
@@ -148,6 +131,12 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
   } finally {
     db.close();
   }
+}
+
+// Half-open key range for a prefix, so SQLite scans the unique index instead of every row.
+function keyRange(prefix: string): [string, string] {
+  const last = prefix.charCodeAt(prefix.length - 1);
+  return [prefix, `${prefix.slice(0, -1)}${String.fromCharCode(last + 1)}`];
 }
 
 interface CursorHeaderRow {
@@ -168,23 +157,6 @@ function decodeBlob(value: unknown): Record<string, unknown> {
     return JSON.parse(Buffer.from(value).toString("utf8")) as Record<string, unknown>;
   }
   throw new Error("unsupported cursor blob");
-}
-
-function loadBubbles(db: DatabaseSync, headers: CursorHeaderRow[]): Array<{ key: string; value: unknown }> {
-  if (headers.length === 0) {
-    return [];
-  }
-  if (headers.length > 16) {
-    return asRows<Array<{ key: string; value: unknown }>>(
-      db.prepare(`SELECT key, value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%'`).all(),
-    );
-  }
-  const statement = db.prepare(`SELECT key, value FROM cursorDiskKV WHERE key LIKE ?`);
-  const rows: Array<{ key: string; value: unknown }> = [];
-  for (const header of headers) {
-    rows.push(...asRows<Array<{ key: string; value: unknown }>>(statement.all(`bubbleId:${header.composerId}:%`)));
-  }
-  return rows;
 }
 
 function bubbleToTurn(
