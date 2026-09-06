@@ -413,7 +413,7 @@ export class Store {
     return { sessions, turns, candidates, suggestions };
   }
 
-  usageRows(): Array<{
+  usageRows(since: string | null = null): Array<{
     ts: string;
     harness: Harness;
     model: string | null;
@@ -422,8 +422,11 @@ export class Store {
     cacheRead: number;
     cacheWrite: number;
   }> {
+    const select = `SELECT ts, harness, model, tokens_in, tokens_out, cache_read, cache_write FROM usage_event`;
     const rows = asRows<UsageRow[]>(
-      this.db.prepare(`SELECT ts, harness, model, tokens_in, tokens_out, cache_read, cache_write FROM usage_event`).all(),
+      since
+        ? this.db.prepare(`${select} WHERE ts >= ?`).all(since)
+        : this.db.prepare(select).all(),
     );
     return rows.map((row) => ({
       ts: row.ts,
