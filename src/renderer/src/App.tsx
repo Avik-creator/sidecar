@@ -334,19 +334,30 @@ function AgentsView({
             .includes(needle),
         )
       : sessions;
-    const needs = rows.filter((session) => session.state === "needs_attention" || session.hasBlocking);
-    const running = rows.filter(
-      (session) => session.state === "active" && !session.hasBlocking && !session.isSidechain,
-    );
-    const subagents = rows.filter(
-      (session) => session.state === "active" && !session.hasBlocking && session.isSidechain,
+    // Subagents hang off their parent's card, so they never take a row of their own.
+    const children = new Map<string, SessionRecord[]>();
+    for (const session of rows) {
+      if (!session.parentId || session.state !== "active") {
+        continue;
+      }
+      children.set(session.parentId, [...(children.get(session.parentId) ?? []), session]);
+    }
+    const top = rows.filter((session) => !session.parentId);
+    const needs = top.filter((session) => session.state === "needs_attention" || session.hasBlocking);
+    const running = top.filter((session) => session.state === "active" && !session.hasBlocking);
+    // A subagent whose parent has dropped off the list still deserves a row.
+    const orphans = rows.filter(
+      (session) =>
+        session.parentId != null &&
+        session.state === "active" &&
+        !top.some((parent) => parent.id === session.parentId),
     );
     // Recently touched but never reported through a hook, so Sidecar cannot say what it is doing.
     const cutoff = Date.now() - NOT_REPORTING_WINDOW_MS;
-    const silent = rows.filter(
+    const silent = top.filter(
       (session) => session.state === "unknown" && Date.parse(session.lastTs ?? "") >= cutoff,
     );
-    return { needs, running, subagents, silent };
+    return { needs, running, orphans, silent, children };
   }, [sessions, query]);
 
   return (
@@ -364,7 +375,12 @@ function AgentsView({
       {filtered.needs.length > 0 && (
         <Section title="Needs you">
           {filtered.needs.map((session) => (
-            <AgentCard key={session.id} session={session} attention />
+            <AgentCard
+              key={session.id}
+              session={session}
+              subagents={filtered.children.get(session.id)}
+              attention
+            />
           ))}
         </Section>
       )}
@@ -375,12 +391,18 @@ function AgentsView({
             body="Sidecar is watching Claude Code, Codex, and Cursor on this machine."
           />
         ) : (
-          filtered.running.map((session) => <AgentCard key={session.id} session={session} />)
+          filtered.running.map((session) => (
+            <AgentCard
+              key={session.id}
+              session={session}
+              subagents={filtered.children.get(session.id)}
+            />
+          ))
         )}
       </Section>
-      {filtered.subagents.length > 0 && (
+      {filtered.orphans.length > 0 && (
         <Section title="Subagents">
-          {filtered.subagents.map((session) => (
+          {filtered.orphans.map((session) => (
             <AgentCard key={session.id} session={session} />
           ))}
         </Section>
@@ -399,6 +421,11 @@ function AgentsView({
       )}
     </>
   );
+}
+
+// A subagent's own turns describe its task; the parent's activity would just repeat the session title.
+function subagentTask(session: SessionRecord): string {
+  return session.activity || session.title || "working";
 }
 
 function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup: () => void }) {
@@ -428,7 +455,15 @@ function joinLabels(labels: string[]): string {
   return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
 }
 
-function AgentCard({ session, attention = false }: { session: SessionRecord; attention?: boolean }) {
+function AgentCard({
+  session,
+  subagents,
+  attention = false,
+}: {
+  session: SessionRecord;
+  subagents?: SessionRecord[];
+  attention?: boolean;
+}) {
   const [note, setNote] = useState<string | null>(null);
   const status =
     session.state === "needs_attention" || session.hasBlocking
@@ -466,6 +501,17 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
         </div>
       )}
       {note && <p className="muted card-note">{note}</p>}
+      {subagents && subagents.length > 0 && (
+        <ul className="subagents">
+          {subagents.map((child) => (
+            <li key={child.id}>
+              <span className="subagent-type">{child.agentType ?? "subagent"}</span>
+              <span className="subagent-task">{subagentTask(child)}</span>
+              <span className="spin" />
+            </li>
+          ))}
+        </ul>
+      )}
     </article>
   );
 

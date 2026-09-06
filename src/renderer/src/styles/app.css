@@ -669,3 +669,43 @@ pre {
 .setting-row input {
   margin-top: 2px;
 }
+
+.subagents {
+  margin: 8px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--stroke);
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.subagents li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.subagent-type {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 650;
+  line-height: 18px;
+}
+
+.subagent-task {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagents .spin {
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
