@@ -1,6 +1,6 @@
 {
   "name": "sidecar",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": "Avik-creator",
   "private": true,
   "description": "Local-first companion for Claude Code, Codex, and Cursor",
