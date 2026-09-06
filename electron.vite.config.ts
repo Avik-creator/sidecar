@@ -10,6 +10,7 @@ export default defineConfig({
         input: {
           index: resolve("src/main/index.ts"),
           "ingest-worker": resolve("src/main/ingest-worker.ts"),
+          cli: resolve("src/cli/index.ts"),
         },
       },
     },
