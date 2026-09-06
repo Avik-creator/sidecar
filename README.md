@@ -72,17 +72,36 @@ There is no localhost server and no `Access-Control-Allow-Origin`.
 
 ### The spool
 
-A hook runs **inside your agent's turn**. Whatever it does, you wait for it. That constraint shapes the whole design.
+The spool is a **drop box**: a folder agents write notes into, and Sidecar picks them up later.
 
-So `~/.sidecar/bin/sidecar-hook` is plain POSIX `sh` — no Node process to boot. It costs about **10 ms** per event, against about 40 ms for the equivalent Node CLI. The gap is not the code: a Node process that does nothing at all costs about 22 ms to start, which is already more than twice the whole hook. All the helper does is write one small JSON file into `~/.sidecar/hooks/` and exit. It never opens the database, never talks to the app, and never fails your turn: every error path exits 0.
+Here is the problem it solves. When Claude Code or Codex hits a permission prompt, it tells Sidecar by running a small script. That script runs *in the middle of your agent's turn* — your agent is sitting there waiting for it to finish. So it has to be fast, and it must never break.
 
-That directory is the spool — a drop box between agents that must not block and an app that may not be running.
+The obvious approach would be to have that script open Sidecar's database and write the update itself. That is bad three ways: it is slow, it fails when Sidecar is not running, and two agents firing at once fight over the same file.
 
-- **One file per event**, written as `.tmp` then renamed, because rename is atomic. Three agents firing at once cannot interleave into a half-written record, and the reader never sees a partial file.
-- **Named by timestamp with nanosecond precision, plus the process id**, because the reader drains in filename order, and two events landing in the same second is normal rather than exotic.
-- **Drained on the next ingest**, which applies each event to the database and deletes the files. If Sidecar is closed, events queue on disk and are applied when it opens. Re-applying an event is harmless, so a crash mid-drain costs nothing.
+So the script does the least possible work. It writes one tiny file into `~/.sidecar/hooks/` and exits — about 10 ms. Next time Sidecar wakes up, it reads every file in that folder, updates the database, and deletes them.
 
-If Sidecar is not running, your agents do not care. They write to a directory and carry on.
+It is leaving a sticky note on someone's desk instead of waiting outside their office until they are free. You drop the note and get back to work. They read it when they come in.
+
+That buys three things:
+
+- **Sidecar does not have to be open.** Notes pile up in the folder and are read when you next launch it.
+- **Agents cannot collide.** Each event is its own file, so two agents writing at the same moment cannot scribble over each other.
+- **Nothing can break your turn.** If the folder is missing or the disk is full, the script gives up quietly and your agent carries on without noticing.
+
+<details>
+<summary>The fiddly details, in case you hit them</summary>
+
+**Why POSIX `sh` and not Node.** The helper at `~/.sidecar/bin/sidecar-hook` is a shell script because it sits on your agent's critical path. It costs about 10 ms per event against about 40 ms for the same thing as a Node CLI, and the gap is not the code — a Node process that does nothing at all takes about 22 ms to start, already more than twice the entire hook.
+
+**Why `.tmp` then rename.** Each file is written under a temporary name and then renamed, because rename is atomic. Sidecar never reads a half-written note, and three agents firing at once cannot interleave into one record.
+
+**Why the long filenames.** Sidecar drains the folder in filename order, so the name has to sort by arrival. Names carry a nanosecond timestamp plus the process id. Whole seconds were not enough: two events landed in the same second during testing and replayed in the wrong order.
+
+**Why replay is safe.** Draining applies each event and then deletes the file. Applying the same event twice changes nothing, so a crash midway through costs nothing but a repeat.
+
+**Why it never reports failure.** Every path in the script exits 0. A hook that returns an error is a hook that interrupts your work to tell you a status panel is unhappy, which is not a trade worth making.
+
+</details>
 
 ### Turning hooks on
 
