@@ -53,6 +53,10 @@ export interface SessionRecord {
   state: SessionState;
   hasBlocking: boolean;
   isSidechain: boolean;
+  // Set on a subagent row; points at the session that spawned it.
+  parentId: string | null;
+  // The subagent's name, such as "Explore" or "general-purpose".
+  agentType: string | null;
   // Timestamp of the last hook event; null means this session has never reported.
   hookTs?: string | null;
   hookEvent?: string | null;

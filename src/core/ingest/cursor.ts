@@ -64,6 +64,9 @@ export function ingestCursor(
       const uri = asRecord(workspace?.uri);
       const cwd = asString(uri?.fsPath) ?? asString(uri?.path) ?? null;
       const repos = Array.isArray(value.trackedGitRepos) ? value.trackedGitRepos : [];
+      // Cursor names the spawning conversation and the built-in agent that ran, such as "explore".
+      const subagent = asRecord(value.subagentInfo);
+      const parent = asString(subagent?.parentComposerId);
       const session: SessionRecord = {
         id: `cursor:${header.composerId}`,
         harness: "cursor",
@@ -77,7 +80,9 @@ export function ingestCursor(
         lastTs: isoFromMs(header.lastUpdatedAt ?? header.recency) ?? isoFromMs(header.createdAt),
         state: "unknown",
         hasBlocking: false,
-        isSidechain: header.isSubagent === 1,
+        isSidechain: header.isSubagent === 1 || parent != null,
+        parentId: parent ? `cursor:${parent}` : null,
+        agentType: asString(subagent?.subagentTypeName),
       };
 
       const batch = emptyBatch();

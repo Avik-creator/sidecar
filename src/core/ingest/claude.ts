@@ -26,6 +26,8 @@ export function foldSessions(sessions: SessionRecord[]): SessionRecord[] {
       cwd: next.cwd ?? current.cwd,
       gitBranch: next.gitBranch ?? current.gitBranch,
       title: next.title ?? current.title,
+      parentId: next.parentId ?? current.parentId,
+      agentType: next.agentType ?? current.agentType,
       startedAt: current.startedAt ?? next.startedAt,
       endedAt: next.endedAt ?? current.endedAt,
       lastTs: laterOf(current.lastTs, next.lastTs),
@@ -66,18 +68,22 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
   if (!sessionId) {
     return "skip";
   }
-  const id = `claude:${sessionId}`;
+  // Subagents write to their own transcript but carry the parent's sessionId, so they need their own key.
+  const agentId = asString(rec.agentId);
+  const parentId = agentId ? `claude:${sessionId}` : null;
+  const nativeId = agentId ? `${sessionId}:${agentId}` : sessionId;
+  const id = `claude:${nativeId}`;
   const ts = asString(rec.timestamp) ?? new Date(0).toISOString();
   const cwd = asString(rec.cwd);
   const gitBranch = asString(rec.gitBranch);
-  const isSidechain = asBool(rec.isSidechain);
+  const isSidechain = agentId != null || asBool(rec.isSidechain);
   const batch = emptyBatch();
 
   // Transcripts supply content only; hook events are the sole source of session state.
   batch.sessions.push({
     id,
     harness: "claude",
-    nativeId: sessionId,
+    nativeId,
     cwd,
     gitBranch,
     worktree: false,
@@ -88,6 +94,9 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     state: "unknown",
     hasBlocking: false,
     isSidechain,
+    parentId,
+    // Only the subagent's own lines name its type, and only some of them do.
+    agentType: agentId ? asString(rec.attributionAgent) : null,
   });
 
   if (type === "user" || type === "assistant" || type === "system") {
@@ -178,10 +187,15 @@ export function isSyntheticUserText(text: string): boolean {
   return false;
 }
 
+// Subagents live at <parentSessionId>/subagents/agent-<agentId>.jsonl, so the parent is the grandparent dir.
 function sessionIdFromPath(filePath: string): string | null {
-  const base = filePath.split("/").at(-1) ?? "";
-  if (base.endsWith(".jsonl")) {
-    return base.slice(0, -".jsonl".length);
+  const parts = filePath.split("/");
+  const base = parts.at(-1) ?? "";
+  if (!base.endsWith(".jsonl")) {
+    return null;
   }
-  return null;
+  if (parts.at(-2) === "subagents") {
+    return parts.at(-3) ?? null;
+  }
+  return base.slice(0, -".jsonl".length);
 }

@@ -135,6 +135,8 @@ function session(partial: Partial<SessionRecord> & Pick<SessionRecord, "id" | "h
     lastTs: new Date().toISOString(),
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
     activity: "task",
     lastRole: "assistant",
     ...partial,

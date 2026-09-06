@@ -22,6 +22,8 @@ function session(partial: Partial<SessionRecord> & Pick<SessionRecord, "id" | "s
     lastTs: ago(1),
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
     hookTs: ago(1),
     hookEvent: "PostToolUse",
     activity: "task",

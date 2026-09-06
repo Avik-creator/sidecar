@@ -69,6 +69,8 @@ function seedCorrection(store: Store): void {
     state: "unknown",
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
   });
   const turn: TurnRecord = {
     id: "t1",
