@@ -6,11 +6,17 @@ import { runImprove } from "./improve/pipeline.js";
 import { applySuggestion, dismissSuggestion, undoSuggestion } from "./improve/apply.js";
 import { dbPath, sidecarHome } from "./paths.js";
 import { collectSetup } from "./setup/index.js";
+import {
+  hooksStatus as readHooksStatus,
+  installHooks as writeHooks,
+  uninstallHooks as removeHooks,
+} from "./hooks/install.js";
 import { fetchLiveUsage, liveUsageNotes } from "./usage/live.js";
 import { buildUsageReport } from "./usage/report.js";
 import type {
   ApplyResult,
   HealthReport,
+  HookStatus,
   ImproveReport,
   IngestReport,
   SidecarApi,
@@ -105,5 +111,17 @@ export class SidecarService implements SidecarApi {
 
   async dismissSuggestion(id: string): Promise<void> {
     dismissSuggestion(this.store, id);
+  }
+
+  async hooksStatus(): Promise<HookStatus[]> {
+    return readHooksStatus();
+  }
+
+  async installHooks(): Promise<HookStatus[]> {
+    return writeHooks();
+  }
+
+  async uninstallHooks(): Promise<HookStatus[]> {
+    return removeHooks();
   }
 }

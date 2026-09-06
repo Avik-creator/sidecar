@@ -621,3 +621,29 @@ pre {
   background: var(--text);
   color: var(--card);
 }
+
+.status-pill.silent {
+  background: var(--bg-soft);
+  color: var(--faint);
+}
+
+.hooks-banner {
+  border-color: var(--accent);
+}
+
+.hooks-banner .btn {
+  margin-top: 8px;
+}
+
+.hook-status .muted {
+  margin: 6px 0 0;
+  word-break: break-all;
+}
+
+.hook-note {
+  color: var(--accent);
+}
+
+.hook-actions {
+  margin: 10px 0 2px;
+}

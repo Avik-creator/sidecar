@@ -3,7 +3,7 @@ import path from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { backupDir, claudeRoot, codexRoot, cursorHome, hookHelperPath } from "../paths.js";
 import { asRecord } from "../text.js";
-import type { Harness } from "../../shared/types.js";
+import type { Harness, HookStatus } from "../../shared/types.js";
 import { HOOK_HELPER_SCRIPT } from "./helper.js";
 import { installedEvents } from "./events.js";
 
@@ -11,16 +11,6 @@ export interface HookInstallPaths {
   helper: string;
   backups: string;
   configs: Record<Harness, string>;
-}
-
-export interface HookStatus {
-  harness: Harness;
-  configPath: string;
-  installed: boolean;
-  present: string[];
-  missing: string[];
-  foreignEntries: number;
-  note: string | null;
 }
 
 export function hookInstallPaths(): HookInstallPaths {

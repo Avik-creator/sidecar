@@ -152,6 +152,16 @@ export interface IntegrationHealth {
   lastError: string | null;
 }
 
+export interface HookStatus {
+  harness: Harness;
+  configPath: string;
+  installed: boolean;
+  present: string[];
+  missing: string[];
+  foreignEntries: number;
+  note: string | null;
+}
+
 export interface IngestReport {
   filesSeen: number;
   recordsRead: number;
@@ -260,6 +270,9 @@ export interface SidecarApi {
   applySuggestion: (id: string) => Promise<ApplyResult>;
   undoSuggestion: (id: string) => Promise<ApplyResult>;
   dismissSuggestion: (id: string) => Promise<void>;
+  hooksStatus: () => Promise<HookStatus[]>;
+  installHooks: () => Promise<HookStatus[]>;
+  uninstallHooks: () => Promise<HookStatus[]>;
 }
 
 export interface SidecarShell {

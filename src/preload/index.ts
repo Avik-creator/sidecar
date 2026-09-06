@@ -14,6 +14,9 @@ const api: SidecarApi = {
   applySuggestion: (id) => ipcRenderer.invoke("sidecar:applySuggestion", id),
   undoSuggestion: (id) => ipcRenderer.invoke("sidecar:undoSuggestion", id),
   dismissSuggestion: (id) => ipcRenderer.invoke("sidecar:dismissSuggestion", id),
+  hooksStatus: () => ipcRenderer.invoke("sidecar:hooksStatus"),
+  installHooks: () => ipcRenderer.invoke("sidecar:installHooks"),
+  uninstallHooks: () => ipcRenderer.invoke("sidecar:uninstallHooks"),
 };
 
 const shellApi: SidecarShell = {

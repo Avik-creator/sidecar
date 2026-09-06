@@ -1,5 +1,6 @@
 import type {
   HealthReport,
+  HookStatus,
   SessionRecord,
   SetupItemRecord,
   SidecarApi,
@@ -55,7 +56,18 @@ function previewApi(): SidecarApi {
     applySuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     undoSuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     dismissSuggestion: async () => undefined,
+    hooksStatus: async () => previewHooks(),
+    installHooks: async () => previewHooks(),
+    uninstallHooks: async () => previewHooks().map((status) => ({ ...status, installed: false })),
   };
+}
+
+function previewHooks(): HookStatus[] {
+  return [
+    { harness: "claude", configPath: "/Users/preview/.claude/settings.json", installed: true, present: ["Stop"], missing: [], foreignEntries: 2, note: null },
+    { harness: "codex", configPath: "/Users/preview/.codex/hooks.json", installed: true, present: ["Stop"], missing: [], foreignEntries: 1, note: "Run /hooks inside Codex and trust the Sidecar entries before they fire." },
+    { harness: "cursor", configPath: "/Users/preview/.cursor/hooks.json", installed: false, present: [], missing: ["stop"], foreignEntries: 1, note: null },
+  ];
 }
 
 function previewHealth(): HealthReport {

@@ -164,6 +164,9 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => svc.applySuggestion(id));
   ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => svc.undoSuggestion(id));
   ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => svc.dismissSuggestion(id));
+  ipcMain.handle("sidecar:hooksStatus", () => svc.hooksStatus());
+  ipcMain.handle("sidecar:installHooks", () => svc.installHooks());
+  ipcMain.handle("sidecar:uninstallHooks", () => svc.uninstallHooks());
   ipcMain.handle("sidecar:setPinned", (_event, next: boolean) => {
     pinned = next;
     panel?.setAlwaysOnTop(true);
