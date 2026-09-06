@@ -3,7 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../src/core/hooks/events.js";
+import {
+  agentIdFromPayload,
+  agentTypeFromPayload,
+  cwdFromPayload,
+  hookOutcome,
+  outcomeForSubagent,
+  sessionIdFromPayload,
+} from "../src/core/hooks/events.js";
 import {
   ensureHooks,
   hooksStatus,
@@ -355,3 +362,36 @@ describe("hook event mapping", () => {
   });
 });
 
+describe("subagent hook events", () => {
+  it("reads the agent identity Claude adds inside a subagent", () => {
+    const payload = { session_id: "abc-123", agent_id: "a27b1d52", agent_type: "Explore", cwd: "/repo" };
+    expect(sessionIdFromPayload("claude", payload)).toBe("abc-123");
+    expect(agentIdFromPayload(payload)).toBe("a27b1d52");
+    expect(agentTypeFromPayload(payload)).toBe("Explore");
+  });
+
+  it("leaves a main-thread payload without an agent", () => {
+    const payload = { session_id: "abc-123", cwd: "/repo" };
+    expect(agentIdFromPayload(payload)).toBeNull();
+    expect(agentTypeFromPayload(payload)).toBeNull();
+  });
+
+  it("maps the subagent lifecycle for Claude and Codex", () => {
+    for (const harness of ["claude", "codex"] as const) {
+      expect(hookOutcome(harness, "SubagentStart")?.state).toBe("active");
+      expect(hookOutcome(harness, "SubagentStop")?.state).toBe("ended");
+    }
+  });
+
+  it("ends a subagent's turn instead of asking the user for one", () => {
+    const stop = hookOutcome("claude", "Stop");
+    expect(stop?.state).toBe("needs_attention");
+    // A subagent has no user to wait on, so the same event has to mean finished.
+    expect(outcomeForSubagent(stop!).state).toBe("ended");
+  });
+
+  it("still routes a subagent's permission prompt to you", () => {
+    const blocked = hookOutcome("claude", "PermissionRequest");
+    expect(outcomeForSubagent(blocked!)).toEqual({ state: "needs_attention", hasBlocking: true });
+  });
+});

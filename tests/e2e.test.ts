@@ -363,4 +363,42 @@ describe("subagents end to end", () => {
     expect(child?.activity).toContain("mapping the config plumbing");
     store.close();
   });
+
+  it("reports a running subagent through its hook events", () => {
+    const dir = tmp();
+    const spoolDir = path.join(dir, "hooks");
+    fs.mkdirSync(spoolDir, { recursive: true });
+    const write = (name: string, type: string, payload: Record<string, unknown>): void => {
+      fs.writeFileSync(
+        path.join(spoolDir, name),
+        JSON.stringify({ harness: "claude", type, ts: "2026-08-07T12:05:00Z", payload }),
+      );
+    };
+    write("1-claude-SubagentStart.json", "SubagentStart", {
+      session_id: "abc-123",
+      agent_id: "a27b",
+      agent_type: "Explore",
+      cwd: "/repo",
+    });
+    write("2-claude-Stop.json", "Stop", { session_id: "abc-123", cwd: "/repo" });
+
+    const store = Store.open(path.join(dir, "db.sqlite"));
+    ingestAll(store, {
+      claudeDir: path.join(dir, "no-claude"),
+      codexDir: path.join(dir, "no-codex"),
+      cursorDb: path.join(dir, "no.vscdb"),
+      spoolDir,
+    });
+
+    const sessions = store.listSessions();
+    const parent = sessions.find((row) => row.id === "claude:abc-123");
+    const child = sessions.find((row) => row.id === "claude:abc-123:a27b");
+    // The parent finished its turn and wants you; the subagent it spawned is still working.
+    expect(parent?.state).toBe("needs_attention");
+    expect(child?.state).toBe("active");
+    expect(child?.parentId).toBe("claude:abc-123");
+    expect(child?.agentType).toBe("Explore");
+    expect(child?.isSidechain).toBe(true);
+    store.close();
+  });
 });

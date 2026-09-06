@@ -22,6 +22,8 @@ const CLAUDE_EVENTS: Record<string, HookOutcome> = {
   Notification: BLOCKED,
   Stop: YOUR_TURN,
   StopFailure: YOUR_TURN,
+  SubagentStart: WORKING,
+  SubagentStop: FINISHED,
   SessionEnd: FINISHED,
 };
 
@@ -33,6 +35,8 @@ const CODEX_EVENTS: Record<string, HookOutcome> = {
   PermissionRequest: BLOCKED,
   Stop: YOUR_TURN,
   Interrupt: YOUR_TURN,
+  SubagentStart: WORKING,
+  SubagentStop: FINISHED,
   SessionEnd: FINISHED,
 };
 
@@ -55,6 +59,20 @@ const BY_HARNESS: Record<Harness, Record<string, HookOutcome>> = {
 
 export function hookOutcome(harness: Harness, type: string): HookOutcome | null {
   return BY_HARNESS[harness][type] ?? null;
+}
+
+// A subagent never waits on the user, so its finished turn is an end rather than your turn.
+export function outcomeForSubagent(outcome: HookOutcome): HookOutcome {
+  return outcome === YOUR_TURN ? FINISHED : outcome;
+}
+
+// Claude and Codex add these to every payload emitted inside a subagent, not just the Subagent events.
+export function agentIdFromPayload(payload: unknown): string | null {
+  return asString(asRecord(payload)?.agent_id);
+}
+
+export function agentTypeFromPayload(payload: unknown): string | null {
+  return asString(asRecord(payload)?.agent_type);
 }
 
 export function installedEvents(harness: Harness): string[] {
