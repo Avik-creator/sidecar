@@ -1,6 +1,7 @@
 import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { hooksLogPath, sidecarHome } from "../paths.js";
+import { hooksSpoolDir } from "../paths.js";
 
 interface HookEvent {
   harness: "claude" | "codex" | "cursor";
@@ -10,11 +11,26 @@ interface HookEvent {
 }
 
 export function appendHook(event: HookEvent): void {
-  fs.mkdirSync(sidecarHome(), { recursive: true });
-  const line = JSON.stringify({
-    id: randomUUID(),
+  const dir = hooksSpoolDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const payload = asPayloadRecord(event.payload);
+  if (event.sessionId && payload.session_id == null && payload.conversation_id == null) {
+    payload.session_id = event.sessionId;
+  }
+  const body = JSON.stringify({
     ts: new Date().toISOString(),
-    ...event,
+    harness: event.harness,
+    type: event.type,
+    payload,
   });
-  fs.appendFileSync(hooksLogPath(), `${line}\n`);
+  const base = path.join(dir, `${Date.now()}-${randomUUID()}`);
+  fs.writeFileSync(`${base}.tmp`, body);
+  fs.renameSync(`${base}.tmp`, `${base}.json`);
+}
+
+function asPayloadRecord(payload: unknown): Record<string, unknown> {
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    return { ...(payload as Record<string, unknown>) };
+  }
+  return {};
 }
