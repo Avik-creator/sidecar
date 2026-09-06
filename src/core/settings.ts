@@ -5,9 +5,11 @@ import { settingsPath } from "./paths.js";
 import type { Settings } from "../shared/types.js";
 
 // Improve reads your transcripts and edits rule files, so it stays off until you turn it on.
+// Hooks are the opposite: without them Sidecar cannot see any session, so they install themselves.
 export const DEFAULT_SETTINGS: Settings = {
   improveEnabled: false,
   improveGlobalRules: false,
+  hooksAutoInstall: true,
 };
 
 export function readSettings(file = settingsPath()): Settings {
@@ -16,6 +18,7 @@ export function readSettings(file = settingsPath()): Settings {
     return {
       improveEnabled: bool(parsed?.improveEnabled, DEFAULT_SETTINGS.improveEnabled),
       improveGlobalRules: bool(parsed?.improveGlobalRules, DEFAULT_SETTINGS.improveGlobalRules),
+      hooksAutoInstall: bool(parsed?.hooksAutoInstall, DEFAULT_SETTINGS.hooksAutoInstall),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };

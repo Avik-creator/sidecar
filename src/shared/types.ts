@@ -53,6 +53,10 @@ export interface SessionRecord {
   state: SessionState;
   hasBlocking: boolean;
   isSidechain: boolean;
+  // Set on a subagent row; points at the session that spawned it.
+  parentId: string | null;
+  // The subagent's name, such as "Explore" or "general-purpose".
+  agentType: string | null;
   // Timestamp of the last hook event; null means this session has never reported.
   hookTs?: string | null;
   hookEvent?: string | null;
@@ -155,6 +159,8 @@ export interface IntegrationHealth {
 export interface HookStatus {
   harness: Harness;
   configPath: string;
+  // False when the agent has no home directory here, so Sidecar leaves its config alone.
+  detected: boolean;
   installed: boolean;
   present: string[];
   missing: string[];
@@ -260,6 +266,7 @@ export interface HealthReport {
 export interface Settings {
   improveEnabled: boolean;
   improveGlobalRules: boolean;
+  hooksAutoInstall: boolean;
 }
 
 export interface SidecarApi {

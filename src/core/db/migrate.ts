@@ -22,6 +22,23 @@ const MIGRATIONS: Migration[] = [
     statements: [`DROP TABLE IF EXISTS event`],
     vacuum: true,
   },
+  {
+    version: 4,
+    statements: [
+      `ALTER TABLE session ADD COLUMN parent_id TEXT`,
+      `ALTER TABLE session ADD COLUMN agent_type TEXT`,
+      // Subagent turns landed on the parent row, so its flag was whichever file ingested last.
+      `UPDATE session SET is_sidechain = 0`,
+      // Both are derived from turns and rebuilt by Improve, so they go before the turns they cite.
+      `DELETE FROM cluster_membership WHERE turn_id IN (SELECT id FROM turn WHERE is_sidechain = 1)`,
+      `DELETE FROM candidate WHERE turn_id IN (SELECT id FROM turn WHERE is_sidechain = 1)`,
+      `DELETE FROM turn WHERE is_sidechain = 1`,
+      // Re-reads only the subagent transcripts, so those turns come back on their own rows.
+      `DELETE FROM source_file WHERE path LIKE '%/subagents/%'`,
+      // Cursor keeps one watermark for the whole store, so its subagents need a full re-read.
+      `UPDATE source_file SET watermark = '0' WHERE harness = 'cursor'`,
+    ],
+  },
 ];
 
 export function migrate(db: DatabaseSync): void {

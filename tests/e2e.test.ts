@@ -63,6 +63,8 @@ describe("store uniqueness", () => {
       state: "active",
       hasBlocking: false,
       isSidechain: false,
+      parentId: null,
+      agentType: null,
     });
     expect(db.insertTurn(turn)).toBe(true);
     expect(db.insertTurn(turn)).toBe(false);
@@ -114,6 +116,8 @@ describe("store uniqueness", () => {
       state: "needs_attention",
       hasBlocking: true,
       isSidechain: false,
+      parentId: null,
+      agentType: null,
     });
     // A transcript may not claim state, whatever it passes in.
     expect(db.listSessions()[0]).toMatchObject({ state: "unknown", hasBlocking: false });
@@ -204,7 +208,7 @@ describe("ingest + improve e2e", () => {
     expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
-    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true });
+    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true, hooksAutoInstall: true });
     expect(improve.candidates).toBeGreaterThanOrEqual(3);
     expect(improve.promoted).toBeGreaterThanOrEqual(1);
     expect(improve.suggestions).toBeGreaterThanOrEqual(1);
@@ -285,5 +289,116 @@ describe("service", () => {
     const health = await svc.health();
     expect(health.sessions).toBe(0);
     svc.close();
+  });
+});
+
+describe("subagents end to end", () => {
+  function transcript(records: Array<Record<string, unknown>>): string {
+    return `${records.map((record) => JSON.stringify(record)).join("\n")}\n`;
+  }
+
+  it("splits a subagent onto its own row and keeps the parent clean", () => {
+    const dir = tmp();
+    const claudeDir = path.join(dir, "projects");
+    const project = path.join(claudeDir, "-repo");
+    fs.mkdirSync(path.join(project, "abc-123", "subagents"), { recursive: true });
+
+    fs.writeFileSync(
+      path.join(project, "abc-123.jsonl"),
+      transcript([
+        {
+          type: "assistant",
+          sessionId: "abc-123",
+          isSidechain: false,
+          cwd: "/repo",
+          timestamp: "2026-08-07T12:00:00.000Z",
+          uuid: "p1",
+          message: { role: "assistant", content: "delegating the search" },
+        },
+      ]),
+    );
+    fs.writeFileSync(
+      path.join(project, "abc-123", "subagents", "agent-a27b.jsonl"),
+      transcript([
+        {
+          type: "user",
+          sessionId: "abc-123",
+          agentId: "a27b",
+          isSidechain: true,
+          cwd: "/repo",
+          timestamp: "2026-08-07T12:01:00.000Z",
+          uuid: "s1",
+          message: { role: "user", content: "mapping the config plumbing" },
+        },
+        {
+          type: "assistant",
+          sessionId: "abc-123",
+          agentId: "a27b",
+          isSidechain: true,
+          attributionAgent: "Explore",
+          cwd: "/repo",
+          timestamp: "2026-08-07T12:01:30.000Z",
+          uuid: "s2",
+          message: { role: "assistant", content: "found it" },
+        },
+      ]),
+    );
+
+    const store = Store.open(path.join(dir, "db.sqlite"));
+    ingestAll(store, {
+      claudeDir,
+      codexDir: path.join(dir, "no-codex"),
+      cursorDb: path.join(dir, "no.vscdb"),
+      spoolDir: path.join(dir, "no-spool"),
+    });
+
+    const sessions = store.listSessions();
+    const parent = sessions.find((row) => row.id === "claude:abc-123");
+    const child = sessions.find((row) => row.id === "claude:abc-123:a27b");
+    expect(parent?.isSidechain).toBe(false);
+    expect(parent?.parentId).toBeNull();
+    expect(child?.parentId).toBe("claude:abc-123");
+    expect(child?.agentType).toBe("Explore");
+    // The subagent's own turn describes its task, so the card can say what it is doing.
+    expect(child?.activity).toContain("mapping the config plumbing");
+    store.close();
+  });
+
+  it("reports a running subagent through its hook events", () => {
+    const dir = tmp();
+    const spoolDir = path.join(dir, "hooks");
+    fs.mkdirSync(spoolDir, { recursive: true });
+    const write = (name: string, type: string, payload: Record<string, unknown>): void => {
+      fs.writeFileSync(
+        path.join(spoolDir, name),
+        JSON.stringify({ harness: "claude", type, ts: "2026-08-07T12:05:00Z", payload }),
+      );
+    };
+    write("1-claude-SubagentStart.json", "SubagentStart", {
+      session_id: "abc-123",
+      agent_id: "a27b",
+      agent_type: "Explore",
+      cwd: "/repo",
+    });
+    write("2-claude-Stop.json", "Stop", { session_id: "abc-123", cwd: "/repo" });
+
+    const store = Store.open(path.join(dir, "db.sqlite"));
+    ingestAll(store, {
+      claudeDir: path.join(dir, "no-claude"),
+      codexDir: path.join(dir, "no-codex"),
+      cursorDb: path.join(dir, "no.vscdb"),
+      spoolDir,
+    });
+
+    const sessions = store.listSessions();
+    const parent = sessions.find((row) => row.id === "claude:abc-123");
+    const child = sessions.find((row) => row.id === "claude:abc-123:a27b");
+    // The parent finished its turn and wants you; the subagent it spawned is still working.
+    expect(parent?.state).toBe("needs_attention");
+    expect(child?.state).toBe("active");
+    expect(child?.parentId).toBe("claude:abc-123");
+    expect(child?.agentType).toBe("Explore");
+    expect(child?.isSidechain).toBe(true);
+    store.close();
   });
 });

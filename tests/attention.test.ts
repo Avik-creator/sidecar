@@ -16,6 +16,8 @@ function session(partial: Partial<SessionRecord> & Pick<SessionRecord, "id">): S
     state: "active",
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
     ...partial,
   };
 }

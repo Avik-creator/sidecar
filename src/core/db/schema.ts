@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS session (
   state TEXT NOT NULL DEFAULT 'unknown',
   has_blocking INTEGER NOT NULL DEFAULT 0,
   is_sidechain INTEGER NOT NULL DEFAULT 0,
+  parent_id TEXT,
+  agent_type TEXT,
   UNIQUE (harness, native_id)
 );
 

@@ -34,6 +34,8 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
       state: "unknown",
       hasBlocking: false,
       isSidechain: asString(payload.thread_source) === "subagent",
+      parentId: null,
+      agentType: null,
     });
     return batch;
   }
@@ -55,6 +57,8 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
     state: "unknown",
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
   });
 
   if (type === "turn_context") {

@@ -35,9 +35,41 @@ describe("schema migrations", () => {
         version: number;
       }>
     ).map((row) => row.version);
-    expect(versions).toEqual([1, 2, 3]);
+    expect(versions).toEqual([1, 2, 3, 4]);
     expect(columns(store.db, "session")).toContain("hook_ts");
     expect(columns(store.db, "session")).toContain("hook_event");
+    expect(columns(store.db, "session")).toContain("parent_id");
+    expect(columns(store.db, "session")).toContain("agent_type");
+    store.close();
+  });
+
+  it("clears the subagent rows that used to land on their parent", () => {
+    const file = path.join(tmp(), "sidechains.sqlite");
+    const first = Store.open(file);
+    first.db.exec(`DELETE FROM schema_migrations WHERE version = 4`);
+    first.db.exec(
+      `INSERT INTO session(id, harness, native_id, is_sidechain) VALUES ('claude:s1', 'claude', 's1', 1)`,
+    );
+    first.db.exec(
+      `INSERT INTO turn(id, session_id, source_event_id, role, ts, is_sidechain)
+       VALUES ('t1', 'claude:s1', 'e1', 'user', '2026-01-01T00:00:00Z', 1),
+              ('t2', 'claude:s1', 'e2', 'user', '2026-01-01T00:00:01Z', 0)`,
+    );
+    first.db.exec(
+      `INSERT INTO source_file(path, harness) VALUES
+         ('/p/abc/subagents/agent-x.jsonl', 'claude'), ('/p/abc.jsonl', 'claude')`,
+    );
+    first.close();
+
+    const store = Store.open(file);
+    const turns = store.db.prepare(`SELECT id FROM turn`).all() as Array<{ id: string }>;
+    const files = store.db.prepare(`SELECT path FROM source_file`).all() as Array<{ path: string }>;
+    const session = store.db.prepare(`SELECT is_sidechain FROM session`).get() as { is_sidechain: number };
+    // The sidechain turn is dropped so re-ingest can rewrite it onto the subagent's own row.
+    expect(turns.map((row) => row.id)).toEqual(["t2"]);
+    // Only the subagent transcript is re-read; the parent's offset survives.
+    expect(files.map((row) => row.path)).toEqual(["/p/abc.jsonl"]);
+    expect(session.is_sidechain).toBe(0);
     store.close();
   });
 
@@ -73,7 +105,7 @@ describe("schema migrations", () => {
     }
     const db = new DatabaseSync(file);
     const count = db.prepare(`SELECT COUNT(*) AS n FROM schema_migrations`).get() as { n: number };
-    expect(count.n).toBe(3);
+    expect(count.n).toBe(4);
     db.close();
   });
 

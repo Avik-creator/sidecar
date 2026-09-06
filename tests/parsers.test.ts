@@ -17,6 +17,8 @@ function session(partial: Partial<SessionRecord> & Pick<SessionRecord, "id">): S
     state: "unknown",
     hasBlocking: false,
     isSidechain: false,
+    parentId: null,
+    agentType: null,
     ...partial,
   };
 }
@@ -188,5 +190,92 @@ describe("session folding", () => {
     const rows = [session({ id: "a" }), session({ id: "b" })];
     expect(foldSessions(rows)).toEqual(rows);
     expect(foldSessions([])).toEqual([]);
+  });
+});
+
+describe("claude subagents", () => {
+  const SUBAGENT_FILE = "/p/-proj/abc-123/subagents/agent-a27b1d52.jsonl";
+
+  function parse(file: string, record: Record<string, unknown>) {
+    const result = parseClaudeLine(file, JSON.stringify(record));
+    if (result === "skip" || result === "fail") {
+      throw new Error(`expected a batch, got ${result}`);
+    }
+    return result;
+  }
+
+  it("gives a subagent its own session keyed under the parent", () => {
+    // A subagent transcript carries the parent's sessionId, so only agentId separates them.
+    const batch = parse(SUBAGENT_FILE, {
+      type: "assistant",
+      sessionId: "abc-123",
+      agentId: "a27b1d52",
+      isSidechain: true,
+      attributionAgent: "Explore",
+      cwd: "/repo",
+      timestamp: "2026-08-07T12:12:43.911Z",
+      uuid: "u1",
+      message: { role: "assistant", content: "looking" },
+    });
+
+    expect(batch.sessions[0]?.id).toBe("claude:abc-123:a27b1d52");
+    expect(batch.sessions[0]?.parentId).toBe("claude:abc-123");
+    expect(batch.sessions[0]?.agentType).toBe("Explore");
+    expect(batch.sessions[0]?.isSidechain).toBe(true);
+    expect(batch.turns[0]?.sessionId).toBe("claude:abc-123:a27b1d52");
+  });
+
+  it("leaves the parent transcript on the parent row", () => {
+    const batch = parse("/p/-proj/abc-123.jsonl", {
+      type: "assistant",
+      sessionId: "abc-123",
+      isSidechain: false,
+      cwd: "/repo",
+      timestamp: "2026-08-07T12:00:00.000Z",
+      uuid: "u2",
+      message: { role: "assistant", content: "planning" },
+    });
+
+    expect(batch.sessions[0]?.id).toBe("claude:abc-123");
+    expect(batch.sessions[0]?.parentId).toBeNull();
+    expect(batch.sessions[0]?.isSidechain).toBe(false);
+  });
+
+  it("keeps the agent type when a later line omits it", () => {
+    // Only some subagent lines carry attributionAgent, and they are not the last ones.
+    const named = parse(SUBAGENT_FILE, {
+      type: "assistant",
+      sessionId: "abc-123",
+      agentId: "a27b1d52",
+      attributionAgent: "Explore",
+      timestamp: "2026-08-07T12:12:43.911Z",
+      uuid: "u3",
+      message: { role: "assistant", content: "one" },
+    });
+    const unnamed = parse(SUBAGENT_FILE, {
+      type: "user",
+      sessionId: "abc-123",
+      agentId: "a27b1d52",
+      timestamp: "2026-08-07T12:12:44.000Z",
+      uuid: "u4",
+      message: { role: "user", content: "two" },
+    });
+
+    const folded = foldSessions([...named.sessions, ...unnamed.sessions]);
+    expect(folded).toHaveLength(1);
+    expect(folded[0]?.agentType).toBe("Explore");
+    expect(folded[0]?.parentId).toBe("claude:abc-123");
+  });
+
+  it("falls back to the directory when a subagent line omits its sessionId", () => {
+    const batch = parse(SUBAGENT_FILE, {
+      type: "assistant",
+      agentId: "a27b1d52",
+      timestamp: "2026-08-07T12:12:43.911Z",
+      uuid: "u5",
+      message: { role: "assistant", content: "three" },
+    });
+
+    expect(batch.sessions[0]?.parentId).toBe("claude:abc-123");
   });
 });

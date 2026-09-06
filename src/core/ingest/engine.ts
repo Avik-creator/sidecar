@@ -12,7 +12,14 @@ import {
   cursorStateDb,
   hooksSpoolDir,
 } from "../paths.js";
-import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../hooks/events.js";
+import {
+  agentIdFromPayload,
+  agentTypeFromPayload,
+  cwdFromPayload,
+  hookOutcome,
+  outcomeForSubagent,
+  sessionIdFromPayload,
+} from "../hooks/events.js";
 import { clearSpool, readSpool } from "../hooks/spool.js";
 import type { Harness, IngestReport } from "../../shared/types.js";
 
@@ -153,11 +160,15 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
   if (spool.events.length > 0) {
     store.transaction(() => {
       for (const event of spool.events) {
-        const outcome = hookOutcome(event.harness, event.type);
-        const nativeId = sessionIdFromPayload(event.harness, event.payload);
-        if (!outcome || !nativeId) {
+        const base = hookOutcome(event.harness, event.type);
+        const sessionNativeId = sessionIdFromPayload(event.harness, event.payload);
+        if (!base || !sessionNativeId) {
           continue;
         }
+        // Events fired inside a subagent carry its id, so they land on the subagent's own row.
+        const agentId = agentIdFromPayload(event.payload);
+        const outcome = agentId ? outcomeForSubagent(base) : base;
+        const nativeId = agentId ? `${sessionNativeId}:${agentId}` : sessionNativeId;
         store.applyHookState({
           sessionId: `${event.harness}:${nativeId}`,
           harness: event.harness,
@@ -167,6 +178,8 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
           hasBlocking: outcome.hasBlocking,
           ts: event.ts,
           eventType: event.type,
+          parentId: agentId ? `${event.harness}:${sessionNativeId}` : null,
+          agentType: agentId ? agentTypeFromPayload(event.payload) : null,
         });
       }
     });

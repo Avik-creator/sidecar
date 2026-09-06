@@ -190,6 +190,19 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:openInTerminal", (_event, session: SessionRecord) => openInTerminal(session));
 }
 
+// Hooks are how Sidecar sees anything, so a launch repairs them before the first ingest.
+async function ensureHooksInstalled(): Promise<void> {
+  try {
+    for (const status of await getService().ensureHooks()) {
+      if (status.detected && !status.installed) {
+        console.warn(`hooks not installed for ${status.harness}: ${status.note ?? "unknown reason"}`);
+      }
+    }
+  } catch (error) {
+    console.error("hook install failed", error);
+  }
+}
+
 function scheduleIngest(): void {
   if (ingestTimer) {
     clearTimeout(ingestTimer);
@@ -399,6 +412,7 @@ if (!gotLock) {
       app.setActivationPolicy("accessory");
     }
     bindIpc();
+    void ensureHooksInstalled();
     panel = createPanel();
     createTray();
     watchSources();

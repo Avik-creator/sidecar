@@ -261,6 +261,7 @@ export default function App() {
           <SetupView
             items={setup}
             hooks={hooks}
+            settings={settings}
             busy={busy}
             onInstall={() => void run(() => window.sidecar.installHooks())}
             onUninstall={() => void run(() => window.sidecar.uninstallHooks())}
@@ -333,19 +334,30 @@ function AgentsView({
             .includes(needle),
         )
       : sessions;
-    const needs = rows.filter((session) => session.state === "needs_attention" || session.hasBlocking);
-    const running = rows.filter(
-      (session) => session.state === "active" && !session.hasBlocking && !session.isSidechain,
-    );
-    const subagents = rows.filter(
-      (session) => session.state === "active" && !session.hasBlocking && session.isSidechain,
+    // Subagents hang off their parent's card, so they never take a row of their own.
+    const children = new Map<string, SessionRecord[]>();
+    for (const session of rows) {
+      if (!session.parentId || session.state !== "active") {
+        continue;
+      }
+      children.set(session.parentId, [...(children.get(session.parentId) ?? []), session]);
+    }
+    const top = rows.filter((session) => !session.parentId);
+    const needs = top.filter((session) => session.state === "needs_attention" || session.hasBlocking);
+    const running = top.filter((session) => session.state === "active" && !session.hasBlocking);
+    // A subagent whose parent has dropped off the list still deserves a row.
+    const orphans = rows.filter(
+      (session) =>
+        session.parentId != null &&
+        session.state === "active" &&
+        !top.some((parent) => parent.id === session.parentId),
     );
     // Recently touched but never reported through a hook, so Sidecar cannot say what it is doing.
     const cutoff = Date.now() - NOT_REPORTING_WINDOW_MS;
-    const silent = rows.filter(
+    const silent = top.filter(
       (session) => session.state === "unknown" && Date.parse(session.lastTs ?? "") >= cutoff,
     );
-    return { needs, running, subagents, silent };
+    return { needs, running, orphans, silent, children };
   }, [sessions, query]);
 
   return (
@@ -363,7 +375,12 @@ function AgentsView({
       {filtered.needs.length > 0 && (
         <Section title="Needs you">
           {filtered.needs.map((session) => (
-            <AgentCard key={session.id} session={session} attention />
+            <AgentCard
+              key={session.id}
+              session={session}
+              subagents={filtered.children.get(session.id)}
+              attention
+            />
           ))}
         </Section>
       )}
@@ -374,12 +391,18 @@ function AgentsView({
             body="Sidecar is watching Claude Code, Codex, and Cursor on this machine."
           />
         ) : (
-          filtered.running.map((session) => <AgentCard key={session.id} session={session} />)
+          filtered.running.map((session) => (
+            <AgentCard
+              key={session.id}
+              session={session}
+              subagents={filtered.children.get(session.id)}
+            />
+          ))
         )}
       </Section>
-      {filtered.subagents.length > 0 && (
+      {filtered.orphans.length > 0 && (
         <Section title="Subagents">
-          {filtered.subagents.map((session) => (
+          {filtered.orphans.map((session) => (
             <AgentCard key={session.id} session={session} />
           ))}
         </Section>
@@ -400,8 +423,14 @@ function AgentsView({
   );
 }
 
+// A subagent's own turns describe its task; the parent's activity would just repeat the session title.
+function subagentTask(session: SessionRecord): string {
+  return session.activity || session.title || "working";
+}
+
 function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup: () => void }) {
-  const missing = hooks.filter((status) => !status.installed);
+  // Agents that are not on this Mac are not missing anything, so they never raise the banner.
+  const missing = hooks.filter((status) => status.detected && !status.installed);
   if (missing.length === 0) {
     return null;
   }
@@ -426,7 +455,15 @@ function joinLabels(labels: string[]): string {
   return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
 }
 
-function AgentCard({ session, attention = false }: { session: SessionRecord; attention?: boolean }) {
+function AgentCard({
+  session,
+  subagents,
+  attention = false,
+}: {
+  session: SessionRecord;
+  subagents?: SessionRecord[];
+  attention?: boolean;
+}) {
   const [note, setNote] = useState<string | null>(null);
   const status =
     session.state === "needs_attention" || session.hasBlocking
@@ -464,6 +501,17 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
         </div>
       )}
       {note && <p className="muted card-note">{note}</p>}
+      {subagents && subagents.length > 0 && (
+        <ul className="subagents">
+          {subagents.map((child) => (
+            <li key={child.id}>
+              <span className="subagent-type">{child.agentType ?? "subagent"}</span>
+              <span className="subagent-task">{subagentTask(child)}</span>
+              <span className="spin" />
+            </li>
+          ))}
+        </ul>
+      )}
     </article>
   );
 
@@ -480,12 +528,14 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
 const SetupView = memo(function SetupView({
   items,
   hooks,
+  settings,
   busy,
   onInstall,
   onUninstall,
 }: {
   items: SetupItemRecord[];
   hooks: HookStatus[];
+  settings: Settings | null;
   busy: boolean;
   onInstall: () => void;
   onUninstall: () => void;
@@ -517,7 +567,8 @@ const SetupView = memo(function SetupView({
   const skillCount = items.filter((item) => item.kind === "skill").length;
   const mcpCount = items.filter((item) => item.kind === "mcp").length;
 
-  const allInstalled = hooks.length > 0 && hooks.every((status) => status.installed);
+  const wanted = hooks.filter((status) => status.detected);
+  const allInstalled = wanted.length > 0 && wanted.every((status) => status.installed);
 
   return (
     <>
@@ -529,7 +580,7 @@ const SetupView = memo(function SetupView({
               <HarnessMark harness={status.harness} />
               {providerLabel(status.harness)}
             </span>
-            <span className={`status-pill ${status.installed ? "working" : "waiting"}`}>
+            <span className={`status-pill ${status.installed ? "working" : status.detected ? "waiting" : "idle"}`}>
               {hookStateLabel(status)}
             </span>
           </div>
@@ -546,8 +597,11 @@ const SetupView = memo(function SetupView({
         </button>
       </div>
       <p className="muted usage-note">
-        Sidecar adds one entry per event to each agent's hook config. It backs the file up first and
-        leaves entries owned by other tools alone.
+        {settings?.hooksAutoInstall === false
+          ? "Automatic install is off. Sidecar will not touch these configs until you install again."
+          : "Sidecar repairs these entries every time it launches, for the agents it finds on this Mac."}{" "}
+        It adds one entry per event, backs the file up first, and leaves entries owned by other tools
+        alone.
       </p>
       <Section title="Installed" />
       <div className="setup-summary">
@@ -663,6 +717,9 @@ function setupSourceLabel(source: SetupSource): string {
 }
 
 function hookStateLabel(status: HookStatus): string {
+  if (!status.detected) {
+    return "Not on this Mac";
+  }
   if (status.installed) {
     return "Reporting";
   }

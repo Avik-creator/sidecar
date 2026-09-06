@@ -110,8 +110,8 @@ export class Store {
     this
       .statement(
         // state and has_blocking are literals here: only hook events may set them.
-        `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?)
+        `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain, parent_id, agent_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
            git_branch = COALESCE(excluded.git_branch, session.git_branch),
@@ -122,7 +122,9 @@ export class Store {
            last_ts = CASE
              WHEN excluded.last_ts IS NOT NULL AND (session.last_ts IS NULL OR excluded.last_ts > session.last_ts)
              THEN excluded.last_ts ELSE session.last_ts END,
-           is_sidechain = excluded.is_sidechain`,
+           is_sidechain = excluded.is_sidechain,
+           parent_id = COALESCE(excluded.parent_id, session.parent_id),
+           agent_type = COALESCE(excluded.agent_type, session.agent_type)`,
       )
       .run(
         session.id,
@@ -136,6 +138,8 @@ export class Store {
         session.endedAt,
         session.lastTs,
         session.isSidechain ? 1 : 0,
+        session.parentId,
+        session.agentType,
       );
   }
 
@@ -143,10 +147,13 @@ export class Store {
   applyHookState(row: HookStateWrite): void {
     this
       .statement(
-        `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at, parent_id, agent_type, is_sidechain)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
+           parent_id = COALESCE(excluded.parent_id, session.parent_id),
+           agent_type = COALESCE(excluded.agent_type, session.agent_type),
+           is_sidechain = MAX(excluded.is_sidechain, session.is_sidechain),
            state = CASE
              WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
              THEN excluded.state ELSE session.state END,
@@ -174,6 +181,9 @@ export class Store {
         row.eventType,
         row.ts,
         row.ts,
+        row.parentId ?? null,
+        row.agentType ?? null,
+        row.parentId ? 1 : 0,
       );
   }
 
@@ -510,6 +520,8 @@ interface SessionRow {
   state: string;
   has_blocking: number;
   is_sidechain: number;
+  parent_id: string | null;
+  agent_type: string | null;
   hook_ts?: string | null;
   hook_event?: string | null;
   last_text?: string | null;
@@ -525,6 +537,9 @@ export interface HookStateWrite {
   hasBlocking: boolean;
   ts: string;
   eventType: string;
+  // Set when the event fired inside a subagent, which may report before its transcript is read.
+  parentId?: string | null;
+  agentType?: string | null;
 }
 
 interface TurnRow {
@@ -642,6 +657,8 @@ function mapSession(row: SessionRow): SessionRecord {
     hookTs: row.hook_ts ?? null,
     hookEvent: row.hook_event ?? null,
     isSidechain: row.is_sidechain === 1,
+    parentId: row.parent_id ?? null,
+    agentType: row.agent_type ?? null,
     activity: firstActivity(row.title, row.last_text, row.cwd),
     lastRole: row.last_role === "user" || row.last_role === "assistant" ? row.last_role : null,
   };

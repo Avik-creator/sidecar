@@ -3,8 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../src/core/hooks/events.js";
 import {
+  agentIdFromPayload,
+  agentTypeFromPayload,
+  cwdFromPayload,
+  hookOutcome,
+  outcomeForSubagent,
+  sessionIdFromPayload,
+} from "../src/core/hooks/events.js";
+import {
+  ensureHooks,
   hooksStatus,
   installHooks,
   uninstallHooks,
@@ -37,6 +45,11 @@ function fixture(): HookInstallPaths {
       claude: path.join(dir, "claude", "settings.json"),
       codex: path.join(dir, "codex", "hooks.json"),
       cursor: path.join(dir, "cursor", "hooks.json"),
+    },
+    roots: {
+      claude: path.join(dir, "claude"),
+      codex: path.join(dir, "codex"),
+      cursor: path.join(dir, "cursor"),
     },
   };
   fs.mkdirSync(path.dirname(paths.configs.claude), { recursive: true });
@@ -165,7 +178,11 @@ describe("hook installation", () => {
         codex: path.join(dir, "b", "hooks.json"),
         cursor: path.join(dir, "c", "hooks.json"),
       },
+      roots: { claude: path.join(dir, "a"), codex: path.join(dir, "b"), cursor: path.join(dir, "c") },
     };
+    for (const root of Object.values(paths.roots)) {
+      fs.mkdirSync(root, { recursive: true });
+    }
     const statuses = installHooks(paths);
     expect(statuses.every((status) => status.installed)).toBe(true);
     expect(read(paths.configs.cursor).version).toBe(1);
@@ -176,6 +193,49 @@ describe("hook installation", () => {
     const statuses = installHooks(paths);
     const codex = statuses.find((status) => status.harness === "codex");
     expect(codex?.note).toMatch(/\/hooks/);
+  });
+
+  it("installs at launch for the agents that are actually on this machine", () => {
+    const paths = fixture();
+    fs.rmSync(paths.roots.cursor, { recursive: true, force: true });
+
+    const statuses = ensureHooks(paths);
+    const byHarness = new Map(statuses.map((status) => [status.harness, status]));
+    expect(byHarness.get("claude")?.installed).toBe(true);
+    expect(byHarness.get("codex")?.installed).toBe(true);
+    expect(byHarness.get("cursor")?.detected).toBe(false);
+    expect(fs.existsSync(paths.configs.cursor)).toBe(false);
+  });
+
+  it("leaves configs alone once the entries are already there", () => {
+    const paths = fixture();
+    ensureHooks(paths);
+    const before = fs.readdirSync(paths.backups).length;
+    const stamp = fs.statSync(paths.configs.claude).mtimeMs;
+
+    ensureHooks(paths);
+    expect(fs.readdirSync(paths.backups).length).toBe(before);
+    expect(fs.statSync(paths.configs.claude).mtimeMs).toBe(stamp);
+  });
+
+  it("refuses to rewrite a config whose comments it would drop", () => {
+    const paths = fixture();
+    fs.writeFileSync(paths.configs.claude, '{\n  // keep me\n  "hooks": {}\n}\n');
+
+    const claude = ensureHooks(paths).find((status) => status.harness === "claude");
+    expect(claude?.installed).toBe(false);
+    expect(claude?.note).toMatch(/comments/);
+    expect(fs.readFileSync(paths.configs.claude, "utf8")).toContain("// keep me");
+  });
+
+  it("restores entries a user deleted by hand", () => {
+    const paths = fixture();
+    ensureHooks(paths);
+    const doc = read(paths.configs.claude) as { hooks: Record<string, unknown> };
+    delete doc.hooks.Stop;
+    fs.writeFileSync(paths.configs.claude, JSON.stringify(doc, null, 2));
+
+    expect(ensureHooks(paths).find((status) => status.harness === "claude")?.installed).toBe(true);
   });
 
   it("backs up an existing config before rewriting it", () => {
@@ -197,6 +257,7 @@ describe("hook helper script", () => {
         codex: path.join(dir, "hooks.json"),
         cursor: path.join(dir, "cursor.json"),
       },
+      roots: { claude: dir, codex: dir, cursor: dir },
     };
     writeHelper(paths);
     expect(fs.statSync(paths.helper).mode & 0o111).toBeGreaterThan(0);
@@ -232,6 +293,7 @@ describe("hook helper script", () => {
       helper,
       backups: path.join(dir, "backups"),
       configs: { claude: "", codex: "", cursor: "" },
+      roots: { claude: "", codex: "", cursor: "" },
     });
     const fire = (type: string): void => {
       execFileSync(helper, ["claude", type], {
@@ -261,6 +323,7 @@ describe("hook helper script", () => {
       helper,
       backups: path.join(dir, "backups"),
       configs: { claude: "", codex: "", cursor: "" },
+      roots: { claude: "", codex: "", cursor: "" },
     });
     execFileSync(helper, ["codex", "SessionStart"], {
       input: "",
@@ -296,5 +359,39 @@ describe("hook event mapping", () => {
     const payload = { conversation_id: "conv-1", workspace_roots: ["/Users/me/repo"] };
     expect(sessionIdFromPayload("cursor", payload)).toBe("conv-1");
     expect(cwdFromPayload("cursor", payload)).toBe("/Users/me/repo");
+  });
+});
+
+describe("subagent hook events", () => {
+  it("reads the agent identity Claude adds inside a subagent", () => {
+    const payload = { session_id: "abc-123", agent_id: "a27b1d52", agent_type: "Explore", cwd: "/repo" };
+    expect(sessionIdFromPayload("claude", payload)).toBe("abc-123");
+    expect(agentIdFromPayload(payload)).toBe("a27b1d52");
+    expect(agentTypeFromPayload(payload)).toBe("Explore");
+  });
+
+  it("leaves a main-thread payload without an agent", () => {
+    const payload = { session_id: "abc-123", cwd: "/repo" };
+    expect(agentIdFromPayload(payload)).toBeNull();
+    expect(agentTypeFromPayload(payload)).toBeNull();
+  });
+
+  it("maps the subagent lifecycle for Claude and Codex", () => {
+    for (const harness of ["claude", "codex"] as const) {
+      expect(hookOutcome(harness, "SubagentStart")?.state).toBe("active");
+      expect(hookOutcome(harness, "SubagentStop")?.state).toBe("ended");
+    }
+  });
+
+  it("ends a subagent's turn instead of asking the user for one", () => {
+    const stop = hookOutcome("claude", "Stop");
+    expect(stop?.state).toBe("needs_attention");
+    // A subagent has no user to wait on, so the same event has to mean finished.
+    expect(outcomeForSubagent(stop!).state).toBe("ended");
+  });
+
+  it("still routes a subagent's permission prompt to you", () => {
+    const blocked = hookOutcome("claude", "PermissionRequest");
+    expect(outcomeForSubagent(blocked!)).toEqual({ state: "needs_attention", hasBlocking: true });
   });
 });
