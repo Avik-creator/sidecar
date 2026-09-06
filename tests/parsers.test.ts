@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { isClaudeUserPrompt, parseClaudeLine } from "../src/core/ingest/claude.js";
+import { foldSessions, isClaudeUserPrompt, parseClaudeLine } from "../src/core/ingest/claude.js";
 import { parseCodexLine } from "../src/core/ingest/codex.js";
+import type { SessionRecord } from "../src/shared/types.js";
+
+function session(partial: Partial<SessionRecord> & Pick<SessionRecord, "id">): SessionRecord {
+  return {
+    harness: "claude",
+    nativeId: partial.id,
+    cwd: null,
+    gitBranch: null,
+    worktree: false,
+    title: null,
+    startedAt: null,
+    endedAt: null,
+    lastTs: null,
+    state: "unknown",
+    hasBlocking: false,
+    isSidechain: false,
+    ...partial,
+  };
+}
 
 describe("claude parser", () => {
   it("indexes assistant usage and ignores tool-result user rows as prompts", () => {
@@ -144,5 +163,30 @@ describe("codex parser", () => {
     expect(started.sessions[0]?.state).toBe("unknown");
     expect(completed.sessions[0]?.state).toBe("unknown");
     expect(completed.sessions[0]?.endedAt).toBeNull();
+  });
+});
+
+// The fold replaces one upsert per transcript line, so it has to land what the SQL would have.
+describe("session folding", () => {
+  it("keeps one row per session and mirrors the conflict clause", () => {
+    const folded = foldSessions([
+      session({ id: "a", cwd: "/repo", startedAt: "2026-01-01T00:00:00Z", lastTs: "2026-01-01T00:00:00Z" }),
+      session({ id: "b", title: "other" }),
+      session({ id: "a", cwd: null, title: "later", startedAt: "2026-01-02T00:00:00Z", lastTs: "2026-01-01T05:00:00Z" }),
+      session({ id: "a", lastTs: "2026-01-01T02:00:00Z", endedAt: "2026-01-01T06:00:00Z" }),
+    ]);
+    expect(folded).toHaveLength(2);
+    const a = folded.find((row) => row.id === "a");
+    expect(a?.cwd).toBe("/repo");
+    expect(a?.title).toBe("later");
+    expect(a?.startedAt).toBe("2026-01-01T00:00:00Z");
+    expect(a?.endedAt).toBe("2026-01-01T06:00:00Z");
+    expect(a?.lastTs).toBe("2026-01-01T05:00:00Z");
+  });
+
+  it("passes distinct sessions through untouched", () => {
+    const rows = [session({ id: "a" }), session({ id: "b" })];
+    expect(foldSessions(rows)).toEqual(rows);
+    expect(foldSessions([])).toEqual([]);
   });
 });

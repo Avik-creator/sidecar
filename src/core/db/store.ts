@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { migrate } from "./migrate.js";
 import type {
   CandidateRecord,
@@ -30,9 +30,21 @@ function openDatabase(filePath: string): DatabaseSync {
 
 export class Store {
   readonly db: DatabaseSync;
+  // A cold ingest runs the same handful of writes hundreds of thousands of times.
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(db: DatabaseSync) {
     this.db = db;
+  }
+
+  private statement(sql: string): StatementSync {
+    const cached = this.statements.get(sql);
+    if (cached) {
+      return cached;
+    }
+    const prepared = this.db.prepare(sql);
+    this.statements.set(sql, prepared);
+    return prepared;
   }
 
   static open(filePath: string): Store {
@@ -40,6 +52,7 @@ export class Store {
   }
 
   close(): void {
+    this.statements.clear();
     this.db.close();
   }
 
@@ -68,8 +81,8 @@ export class Store {
   }
 
   upsertSourceFile(state: SourceFileState): void {
-    this.db
-      .prepare(
+    this
+      .statement(
         `INSERT INTO source_file(path, harness, inode, size, mtime_ms, byte_offset, parser_version, watermark)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
@@ -94,8 +107,8 @@ export class Store {
   }
 
   upsertSession(session: SessionRecord): void {
-    this.db
-      .prepare(
+    this
+      .statement(
         // state and has_blocking are literals here: only hook events may set them.
         `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?)
@@ -128,8 +141,8 @@ export class Store {
 
   // Hook events are the only writer of session state.
   applyHookState(row: HookStateWrite): void {
-    this.db
-      .prepare(
+    this
+      .statement(
         `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
@@ -165,8 +178,8 @@ export class Store {
   }
 
   insertTurn(turn: TurnRecord): boolean {
-    const result = this.db
-      .prepare(
+    const result = this
+      .statement(
         `INSERT OR IGNORE INTO turn(
            id, session_id, source_event_id, role, ts, model, text,
            tokens_in, tokens_out, cache_read, cache_write,
@@ -199,8 +212,8 @@ export class Store {
   }
 
   insertUsage(event: UsageEventRecord): boolean {
-    const result = this.db
-      .prepare(
+    const result = this
+      .statement(
         `INSERT OR IGNORE INTO usage_event(
            session_id, turn_id, source_event_id, harness, ts, model,
            tokens_in, tokens_out, cache_read, cache_write

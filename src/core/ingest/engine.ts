@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PARSER_VERSION } from "../constants.js";
 import { Store } from "../db/store.js";
-import { parseClaudeLine, emptyBatch, mergeBatch, type ParsedBatch } from "./claude.js";
+import { parseClaudeLine, emptyBatch, foldSessions, mergeBatch, type ParsedBatch } from "./claude.js";
 import { idFromFilename, parseCodexLine } from "./codex.js";
 import { ingestCursor } from "./cursor.js";
 import { fileIdentity, readJsonlFromOffset, resumeOffset, nextSourceState } from "./jsonl.js";
@@ -239,7 +239,7 @@ function persistBatch(store: Store, batch: ParsedBatch): { turns: number; usage:
   let turns = 0;
   let usage = 0;
   store.transaction(() => {
-    for (const session of batch.sessions) {
+    for (const session of foldSessions(batch.sessions)) {
       store.upsertSession(session);
     }
     for (const turn of batch.turns) {

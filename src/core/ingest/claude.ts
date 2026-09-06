@@ -11,6 +11,39 @@ export function emptyBatch(): ParsedBatch {
   return { sessions: [], turns: [], usage: [] };
 }
 
+// Every transcript line carries its session, so a batch holds thousands of copies of a few rows.
+// Folds them the way upsertSession's conflict clause would, leaving one write per session.
+export function foldSessions(sessions: SessionRecord[]): SessionRecord[] {
+  const byId = new Map<string, SessionRecord>();
+  for (const next of sessions) {
+    const current = byId.get(next.id);
+    if (!current) {
+      byId.set(next.id, next);
+      continue;
+    }
+    byId.set(next.id, {
+      ...next,
+      cwd: next.cwd ?? current.cwd,
+      gitBranch: next.gitBranch ?? current.gitBranch,
+      title: next.title ?? current.title,
+      startedAt: current.startedAt ?? next.startedAt,
+      endedAt: next.endedAt ?? current.endedAt,
+      lastTs: laterOf(current.lastTs, next.lastTs),
+    });
+  }
+  return [...byId.values()];
+}
+
+function laterOf(a: string | null, b: string | null): string | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return b > a ? b : a;
+}
+
 export function mergeBatch(into: ParsedBatch, extra: ParsedBatch): void {
   into.sessions.push(...extra.sessions);
   into.turns.push(...extra.turns);
