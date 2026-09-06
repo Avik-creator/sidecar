@@ -1,26 +1,51 @@
 import { Worker } from "node:worker_threads";
-import type { IngestReport } from "../shared/types.js";
-import type { IngestWorkerRequest, IngestWorkerResponse } from "./ingest-protocol.js";
+import type { ApplyResult, ImproveReport, IngestReport } from "../shared/types.js";
+import type {
+  IngestWorkerRequest,
+  IngestWorkerResponse,
+  WorkerJob,
+  WorkerValue,
+} from "./ingest-protocol.js";
 
-interface PendingIngest {
-  resolve: (report: IngestReport) => void;
+interface PendingJob {
+  resolve: (value: WorkerValue) => void;
   reject: (error: Error) => void;
 }
 
 export class IngestWorkerClient {
   private worker: Worker | null = null;
   private nextId = 1;
-  private readonly pending = new Map<number, PendingIngest>();
+  private readonly pending = new Map<number, PendingJob>();
 
   constructor(private readonly workerUrl: URL) {}
 
   ingest(): Promise<IngestReport> {
+    return this.run({ type: "ingest" }) as Promise<IngestReport>;
+  }
+
+  runImprove(): Promise<ImproveReport> {
+    return this.run({ type: "runImprove" }) as Promise<ImproveReport>;
+  }
+
+  applySuggestion(suggestionId: string): Promise<ApplyResult> {
+    return this.run({ type: "applySuggestion", suggestionId }) as Promise<ApplyResult>;
+  }
+
+  undoSuggestion(suggestionId: string): Promise<ApplyResult> {
+    return this.run({ type: "undoSuggestion", suggestionId }) as Promise<ApplyResult>;
+  }
+
+  async dismissSuggestion(suggestionId: string): Promise<void> {
+    await this.run({ type: "dismissSuggestion", suggestionId });
+  }
+
+  private run(job: WorkerJob): Promise<WorkerValue> {
     const worker = this.getWorker();
     const id = this.nextId;
     this.nextId += 1;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      const request: IngestWorkerRequest = { type: "ingest", id };
+      const request: IngestWorkerRequest = { ...job, id };
       worker.postMessage(request);
     });
   }
@@ -68,7 +93,7 @@ export class IngestWorkerClient {
     this.pending.delete(message.id);
     switch (message.type) {
       case "result":
-        pending.resolve(message.report);
+        pending.resolve(message.value);
         return;
       case "error":
         pending.reject(new Error(message.error));

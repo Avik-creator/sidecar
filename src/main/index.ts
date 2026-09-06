@@ -166,10 +166,11 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:candidates", (_event, limit?: number) => svc.candidates(limit));
   ipcMain.handle("sidecar:clusters", () => svc.clusters());
   ipcMain.handle("sidecar:suggestions", () => svc.suggestions());
-  ipcMain.handle("sidecar:runImprove", () => svc.runImprove());
-  ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => svc.applySuggestion(id));
-  ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => svc.undoSuggestion(id));
-  ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => svc.dismissSuggestion(id));
+  // Improve writes, so it runs on the worker; the main store connection stays read-only.
+  ipcMain.handle("sidecar:runImprove", () => getIngestWorker().runImprove());
+  ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => getIngestWorker().applySuggestion(id));
+  ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => getIngestWorker().undoSuggestion(id));
+  ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => getIngestWorker().dismissSuggestion(id));
   ipcMain.handle("sidecar:hooksStatus", () => svc.hooksStatus());
   ipcMain.handle("sidecar:installHooks", () => svc.installHooks());
   ipcMain.handle("sidecar:uninstallHooks", () => svc.uninstallHooks());
