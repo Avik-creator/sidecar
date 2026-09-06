@@ -204,7 +204,7 @@ describe("ingest + improve e2e", () => {
     expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
-    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true });
+    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true, hooksAutoInstall: true });
     expect(improve.candidates).toBeGreaterThanOrEqual(3);
     expect(improve.promoted).toBeGreaterThanOrEqual(1);
     expect(improve.suggestions).toBeGreaterThanOrEqual(1);
@@ -287,3 +287,4 @@ describe("service", () => {
     svc.close();
   });
 });
+

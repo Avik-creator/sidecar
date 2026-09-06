@@ -41,9 +41,10 @@ describe("settings", () => {
     expect(writeSettings({ improveEnabled: true }, file)).toEqual({
       improveEnabled: true,
       improveGlobalRules: false,
+      hooksAutoInstall: true,
     });
     expect(writeSettings({ improveGlobalRules: true }, file).improveEnabled).toBe(true);
-    expect(readSettings(file)).toEqual({ improveEnabled: true, improveGlobalRules: true });
+    expect(readSettings(file)).toEqual({ improveEnabled: true, improveGlobalRules: true, hooksAutoInstall: true });
   });
 
   it("falls back to defaults on a corrupt settings file", () => {
@@ -98,9 +99,9 @@ describe("improve gate", () => {
     const store = Store.open(path.join(tmp(), "db.sqlite"));
     seedCorrection(store);
     // The same store with the gate open finds this correction, so zero here is the gate.
-    expect(runImprove(store, { improveEnabled: true, improveGlobalRules: false }).candidates).toBe(1);
+    expect(runImprove(store, { improveEnabled: true, improveGlobalRules: false, hooksAutoInstall: true }).candidates).toBe(1);
     store.replaceCandidates([]);
-    const report = runImprove(store, { improveEnabled: false, improveGlobalRules: false });
+    const report = runImprove(store, { improveEnabled: false, improveGlobalRules: false, hooksAutoInstall: true });
     expect(report).toEqual({
       candidates: 0,
       clusters: 0,

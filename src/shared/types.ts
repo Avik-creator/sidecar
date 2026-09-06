@@ -155,6 +155,8 @@ export interface IntegrationHealth {
 export interface HookStatus {
   harness: Harness;
   configPath: string;
+  // False when the agent has no home directory here, so Sidecar leaves its config alone.
+  detected: boolean;
   installed: boolean;
   present: string[];
   missing: string[];
@@ -260,6 +262,7 @@ export interface HealthReport {
 export interface Settings {
   improveEnabled: boolean;
   improveGlobalRules: boolean;
+  hooksAutoInstall: boolean;
 }
 
 export interface SidecarApi {

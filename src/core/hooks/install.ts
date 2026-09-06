@@ -11,6 +11,7 @@ export interface HookInstallPaths {
   helper: string;
   backups: string;
   configs: Record<Harness, string>;
+  roots: Record<Harness, string>;
 }
 
 export function hookInstallPaths(): HookInstallPaths {
@@ -21,6 +22,11 @@ export function hookInstallPaths(): HookInstallPaths {
       claude: path.join(claudeRoot(), "settings.json"),
       codex: path.join(codexRoot(), "hooks.json"),
       cursor: path.join(cursorHome(), "hooks.json"),
+    },
+    roots: {
+      claude: claudeRoot(),
+      codex: codexRoot(),
+      cursor: cursorHome(),
     },
   };
 }
@@ -35,15 +41,28 @@ export function hooksStatus(paths = hookInstallPaths()): HookStatus[] {
   return harnesses().map((harness) => inspect(harness, paths));
 }
 
-export function installHooks(paths = hookInstallPaths()): HookStatus[] {
+export function installHooks(paths = hookInstallPaths(), only?: Harness[]): HookStatus[] {
   writeHelper(paths);
-  for (const harness of harnesses()) {
+  const targets = only ?? harnesses().filter((harness) => detected(harness, paths));
+  for (const harness of targets) {
     const configPath = paths.configs[harness];
     const doc = readConfig(configPath);
     const next = addOurEntries(harness, doc, paths.helper);
     writeConfig(configPath, next, paths.backups);
   }
   return hooksStatus(paths);
+}
+
+// Runs on every launch: rewrites the helper, then touches only configs that are actually missing entries.
+export function ensureHooks(paths = hookInstallPaths()): HookStatus[] {
+  writeHelper(paths);
+  const stale = hooksStatus(paths).filter(
+    (status) => status.detected && status.missing.length > 0 && safety(status.configPath) === "ok",
+  );
+  if (stale.length === 0) {
+    return hooksStatus(paths);
+  }
+  return installHooks(paths, stale.map((status) => status.harness));
 }
 
 export function uninstallHooks(paths = hookInstallPaths()): HookStatus[] {
@@ -61,6 +80,26 @@ export function uninstallHooks(paths = hookInstallPaths()): HookStatus[] {
 
 function harnesses(): Harness[] {
   return ["claude", "codex", "cursor"];
+}
+
+function detected(harness: Harness, paths: HookInstallPaths): boolean {
+  return fs.existsSync(paths.roots[harness]);
+}
+
+// Writing back re-serialises the file, so a config with comments is only ever rewritten on request.
+function safety(configPath: string): "ok" | "comments" | "unreadable" {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(configPath, "utf8");
+  } catch {
+    return "ok";
+  }
+  try {
+    JSON.parse(raw);
+    return "ok";
+  } catch {
+    return asRecord(parseJsonc(raw) as unknown) ? "comments" : "unreadable";
+  }
 }
 
 function inspect(harness: Harness, paths: HookInstallPaths): HookStatus {
@@ -88,15 +127,35 @@ function inspect(harness: Harness, paths: HookInstallPaths): HookStatus {
   return {
     harness,
     configPath,
+    detected: detected(harness, paths),
     installed: missing.length === 0 && present.length > 0,
     present,
     missing,
     foreignEntries,
-    note:
-      harness === "codex" && present.length > 0
-        ? "Run /hooks inside Codex and trust the Sidecar entries before they fire."
-        : null,
+    note: statusNote(harness, configPath, paths, present.length > 0),
   };
+}
+
+function statusNote(
+  harness: Harness,
+  configPath: string,
+  paths: HookInstallPaths,
+  anyPresent: boolean,
+): string | null {
+  if (!detected(harness, paths)) {
+    return "Not installed on this Mac, so Sidecar left it alone.";
+  }
+  const state = safety(configPath);
+  if (state === "comments") {
+    return "This config has comments Sidecar would drop, so it installs only when you ask.";
+  }
+  if (state === "unreadable") {
+    return "Sidecar could not read this config, so it installs only when you ask.";
+  }
+  if (harness === "codex" && anyPresent) {
+    return "Run /hooks inside Codex and trust the Sidecar entries before they fire.";
+  }
+  return null;
 }
 
 function readConfig(configPath: string): Record<string, unknown> {

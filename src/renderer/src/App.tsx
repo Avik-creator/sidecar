@@ -261,6 +261,7 @@ export default function App() {
           <SetupView
             items={setup}
             hooks={hooks}
+            settings={settings}
             busy={busy}
             onInstall={() => void run(() => window.sidecar.installHooks())}
             onUninstall={() => void run(() => window.sidecar.uninstallHooks())}
@@ -401,7 +402,8 @@ function AgentsView({
 }
 
 function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup: () => void }) {
-  const missing = hooks.filter((status) => !status.installed);
+  // Agents that are not on this Mac are not missing anything, so they never raise the banner.
+  const missing = hooks.filter((status) => status.detected && !status.installed);
   if (missing.length === 0) {
     return null;
   }
@@ -480,12 +482,14 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
 const SetupView = memo(function SetupView({
   items,
   hooks,
+  settings,
   busy,
   onInstall,
   onUninstall,
 }: {
   items: SetupItemRecord[];
   hooks: HookStatus[];
+  settings: Settings | null;
   busy: boolean;
   onInstall: () => void;
   onUninstall: () => void;
@@ -517,7 +521,8 @@ const SetupView = memo(function SetupView({
   const skillCount = items.filter((item) => item.kind === "skill").length;
   const mcpCount = items.filter((item) => item.kind === "mcp").length;
 
-  const allInstalled = hooks.length > 0 && hooks.every((status) => status.installed);
+  const wanted = hooks.filter((status) => status.detected);
+  const allInstalled = wanted.length > 0 && wanted.every((status) => status.installed);
 
   return (
     <>
@@ -529,7 +534,7 @@ const SetupView = memo(function SetupView({
               <HarnessMark harness={status.harness} />
               {providerLabel(status.harness)}
             </span>
-            <span className={`status-pill ${status.installed ? "working" : "waiting"}`}>
+            <span className={`status-pill ${status.installed ? "working" : status.detected ? "waiting" : "idle"}`}>
               {hookStateLabel(status)}
             </span>
           </div>
@@ -546,8 +551,11 @@ const SetupView = memo(function SetupView({
         </button>
       </div>
       <p className="muted usage-note">
-        Sidecar adds one entry per event to each agent's hook config. It backs the file up first and
-        leaves entries owned by other tools alone.
+        {settings?.hooksAutoInstall === false
+          ? "Automatic install is off. Sidecar will not touch these configs until you install again."
+          : "Sidecar repairs these entries every time it launches, for the agents it finds on this Mac."}{" "}
+        It adds one entry per event, backs the file up first, and leaves entries owned by other tools
+        alone.
       </p>
       <Section title="Installed" />
       <div className="setup-summary">
@@ -663,6 +671,9 @@ function setupSourceLabel(source: SetupSource): string {
 }
 
 function hookStateLabel(status: HookStatus): string {
+  if (!status.detected) {
+    return "Not on this Mac";
+  }
   if (status.installed) {
     return "Reporting";
   }

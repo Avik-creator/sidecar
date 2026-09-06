@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../src/core/hooks/events.js";
 import {
+  ensureHooks,
   hooksStatus,
   installHooks,
   uninstallHooks,
@@ -37,6 +38,11 @@ function fixture(): HookInstallPaths {
       claude: path.join(dir, "claude", "settings.json"),
       codex: path.join(dir, "codex", "hooks.json"),
       cursor: path.join(dir, "cursor", "hooks.json"),
+    },
+    roots: {
+      claude: path.join(dir, "claude"),
+      codex: path.join(dir, "codex"),
+      cursor: path.join(dir, "cursor"),
     },
   };
   fs.mkdirSync(path.dirname(paths.configs.claude), { recursive: true });
@@ -165,7 +171,11 @@ describe("hook installation", () => {
         codex: path.join(dir, "b", "hooks.json"),
         cursor: path.join(dir, "c", "hooks.json"),
       },
+      roots: { claude: path.join(dir, "a"), codex: path.join(dir, "b"), cursor: path.join(dir, "c") },
     };
+    for (const root of Object.values(paths.roots)) {
+      fs.mkdirSync(root, { recursive: true });
+    }
     const statuses = installHooks(paths);
     expect(statuses.every((status) => status.installed)).toBe(true);
     expect(read(paths.configs.cursor).version).toBe(1);
@@ -176,6 +186,49 @@ describe("hook installation", () => {
     const statuses = installHooks(paths);
     const codex = statuses.find((status) => status.harness === "codex");
     expect(codex?.note).toMatch(/\/hooks/);
+  });
+
+  it("installs at launch for the agents that are actually on this machine", () => {
+    const paths = fixture();
+    fs.rmSync(paths.roots.cursor, { recursive: true, force: true });
+
+    const statuses = ensureHooks(paths);
+    const byHarness = new Map(statuses.map((status) => [status.harness, status]));
+    expect(byHarness.get("claude")?.installed).toBe(true);
+    expect(byHarness.get("codex")?.installed).toBe(true);
+    expect(byHarness.get("cursor")?.detected).toBe(false);
+    expect(fs.existsSync(paths.configs.cursor)).toBe(false);
+  });
+
+  it("leaves configs alone once the entries are already there", () => {
+    const paths = fixture();
+    ensureHooks(paths);
+    const before = fs.readdirSync(paths.backups).length;
+    const stamp = fs.statSync(paths.configs.claude).mtimeMs;
+
+    ensureHooks(paths);
+    expect(fs.readdirSync(paths.backups).length).toBe(before);
+    expect(fs.statSync(paths.configs.claude).mtimeMs).toBe(stamp);
+  });
+
+  it("refuses to rewrite a config whose comments it would drop", () => {
+    const paths = fixture();
+    fs.writeFileSync(paths.configs.claude, '{\n  // keep me\n  "hooks": {}\n}\n');
+
+    const claude = ensureHooks(paths).find((status) => status.harness === "claude");
+    expect(claude?.installed).toBe(false);
+    expect(claude?.note).toMatch(/comments/);
+    expect(fs.readFileSync(paths.configs.claude, "utf8")).toContain("// keep me");
+  });
+
+  it("restores entries a user deleted by hand", () => {
+    const paths = fixture();
+    ensureHooks(paths);
+    const doc = read(paths.configs.claude) as { hooks: Record<string, unknown> };
+    delete doc.hooks.Stop;
+    fs.writeFileSync(paths.configs.claude, JSON.stringify(doc, null, 2));
+
+    expect(ensureHooks(paths).find((status) => status.harness === "claude")?.installed).toBe(true);
   });
 
   it("backs up an existing config before rewriting it", () => {
@@ -197,6 +250,7 @@ describe("hook helper script", () => {
         codex: path.join(dir, "hooks.json"),
         cursor: path.join(dir, "cursor.json"),
       },
+      roots: { claude: dir, codex: dir, cursor: dir },
     };
     writeHelper(paths);
     expect(fs.statSync(paths.helper).mode & 0o111).toBeGreaterThan(0);
@@ -232,6 +286,7 @@ describe("hook helper script", () => {
       helper,
       backups: path.join(dir, "backups"),
       configs: { claude: "", codex: "", cursor: "" },
+      roots: { claude: "", codex: "", cursor: "" },
     });
     const fire = (type: string): void => {
       execFileSync(helper, ["claude", type], {
@@ -261,6 +316,7 @@ describe("hook helper script", () => {
       helper,
       backups: path.join(dir, "backups"),
       configs: { claude: "", codex: "", cursor: "" },
+      roots: { claude: "", codex: "", cursor: "" },
     });
     execFileSync(helper, ["codex", "SessionStart"], {
       input: "",
@@ -298,3 +354,4 @@ describe("hook event mapping", () => {
     expect(cwdFromPayload("cursor", payload)).toBe("/Users/me/repo");
   });
 });
+

@@ -8,6 +8,7 @@ import { dbPath, sidecarHome } from "./paths.js";
 import { collectSetup } from "./setup/index.js";
 import { readSettings, writeSettings } from "./settings.js";
 import {
+  ensureHooks as autoInstallHooks,
   hooksStatus as readHooksStatus,
   installHooks as writeHooks,
   uninstallHooks as removeHooks,
@@ -127,11 +128,22 @@ export class SidecarService implements SidecarApi {
     return readHooksStatus();
   }
 
+  // Runs at launch: without hooks Sidecar sees nothing, so it repairs its own wiring.
+  async ensureHooks(): Promise<HookStatus[]> {
+    if (!readSettings().hooksAutoInstall) {
+      return readHooksStatus();
+    }
+    return autoInstallHooks();
+  }
+
   async installHooks(): Promise<HookStatus[]> {
+    writeSettings({ hooksAutoInstall: true });
     return writeHooks();
   }
 
+  // Removing by hand also switches the automatic install off, so it stays removed.
   async uninstallHooks(): Promise<HookStatus[]> {
+    writeSettings({ hooksAutoInstall: false });
     return removeHooks();
   }
 }
