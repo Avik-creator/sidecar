@@ -58,6 +58,8 @@ function previewApi(): SidecarApi {
     applySuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     undoSuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     dismissSuggestion: async () => undefined,
+    settings: async () => ({ improveEnabled: true, improveGlobalRules: false }),
+    updateSettings: async (patch) => ({ improveEnabled: true, improveGlobalRules: false, ...patch }),
     hooksStatus: async () => previewHooks(),
     installHooks: async () => previewHooks(),
     uninstallHooks: async () => previewHooks().map((status) => ({ ...status, installed: false })),

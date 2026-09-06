@@ -7,6 +7,7 @@ import { applySuggestion, undoSuggestion, validateTarget } from "../src/core/imp
 import { ingestAll } from "../src/core/ingest/engine.js";
 import { runImprove } from "../src/core/improve/pipeline.js";
 import { buildUsageReport } from "../src/core/usage/report.js";
+import { writeSettings } from "../src/core/settings.js";
 import { SidecarService } from "../src/core/app.js";
 
 const tmpDirs: string[] = [];
@@ -203,7 +204,7 @@ describe("ingest + improve e2e", () => {
     expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
-    const improve = runImprove(store);
+    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true });
     expect(improve.candidates).toBeGreaterThanOrEqual(3);
     expect(improve.promoted).toBeGreaterThanOrEqual(1);
     expect(improve.suggestions).toBeGreaterThanOrEqual(1);
@@ -217,10 +218,15 @@ describe("apply + undo", () => {
     const home = path.join(dir, "home");
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     const previousHome = process.env.HOME;
+    const previous = process.env.SIDECAR_HOME;
     process.env.HOME = home;
+    process.env.SIDECAR_HOME = path.join(dir, "sidecar-home");
     try {
       const target = path.join(home, ".claude", "CLAUDE.md");
       fs.writeFileSync(target, "# rules\n");
+      // The global rules file is opt-in, so the default must refuse it.
+      expect(() => validateTarget(target)).toThrow(/turned off/);
+      writeSettings({ improveGlobalRules: true });
       expect(validateTarget(target)).toBe(fs.realpathSync.native(target));
 
       const store = Store.open(path.join(dir, "db.sqlite"));
@@ -247,9 +253,7 @@ describe("apply + undo", () => {
         backupPath: null,
         appliedHash: null,
       });
-      const previous = process.env.SIDECAR_HOME;
-      process.env.SIDECAR_HOME = path.join(dir, "sidecar-home");
-      try {
+      {
         const applied = applySuggestion(store, "sug-1");
         expect(applied.ok).toBe(true);
         expect(fs.readFileSync(target, "utf8")).toContain("do not inline styles");
@@ -257,15 +261,14 @@ describe("apply + undo", () => {
         const undone = undoSuggestion(store, "sug-1");
         expect(undone.ok).toBe(false);
         expect(undone.error).toMatch(/changed after apply/);
-      } finally {
-        if (previous === undefined) {
-          delete process.env.SIDECAR_HOME;
-        } else {
-          process.env.SIDECAR_HOME = previous;
-        }
       }
       store.close();
     } finally {
+      if (previous === undefined) {
+        delete process.env.SIDECAR_HOME;
+      } else {
+        process.env.SIDECAR_HOME = previous;
+      }
       if (previousHome === undefined) {
         delete process.env.HOME;
       } else {

@@ -13,6 +13,10 @@ export function dbPath(): string {
   return path.join(sidecarHome(), "sidecar.sqlite");
 }
 
+export function settingsPath(): string {
+  return path.join(sidecarHome(), "settings.json");
+}
+
 export function backupDir(): string {
   return path.join(sidecarHome(), "backups");
 }

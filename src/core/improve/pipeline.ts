@@ -5,8 +5,13 @@ import { shortHash } from "../hash.js";
 import { prefilterTurns, type PrefilterHit } from "./prefilter.js";
 import type { ClusterRecord, ImproveReport } from "../../shared/types.js";
 import { planCluster } from "./plan.js";
+import { readSettings } from "../settings.js";
+import type { Settings } from "../../shared/types.js";
 
-export function runImprove(store: Store): ImproveReport {
+export function runImprove(store: Store, settings: Settings = readSettings()): ImproveReport {
+  if (!settings.improveEnabled) {
+    return { candidates: 0, clusters: 0, promoted: 0, suggestions: 0, usedRemoteLlm: false };
+  }
   const turns = store.listTurnsForPrefilter();
   const hits = prefilterTurns(turns);
   const createdAt = new Date().toISOString();
@@ -53,7 +58,7 @@ export function runImprove(store: Store): ImproveReport {
     );
     if (status === "promoted") {
       promoted += 1;
-      const suggestion = planCluster(store, cluster);
+      const suggestion = planCluster(store, cluster, settings.improveGlobalRules);
       if (suggestion) {
         store.insertSuggestion({
           id: randomUUID(),

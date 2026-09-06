@@ -656,3 +656,16 @@ pre {
   margin: 6px 0 0;
   color: var(--danger);
 }
+
+.setting-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setting-row input {
+  margin-top: 2px;
+}

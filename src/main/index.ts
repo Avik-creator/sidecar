@@ -10,7 +10,7 @@ import { createTrayImage } from "./tray-icon.js";
 import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
 import { editorCandidates, existingDir, findExecutable, launch } from "./open-in.js";
 import { attentionIds, needsYou, newlyNeedingYou } from "./attention.js";
-import type { OpenResult, SessionRecord } from "../shared/types.js";
+import type { OpenResult, SessionRecord, Settings } from "../shared/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_WIDTH = 400;
@@ -171,6 +171,8 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => getIngestWorker().applySuggestion(id));
   ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => getIngestWorker().undoSuggestion(id));
   ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => getIngestWorker().dismissSuggestion(id));
+  ipcMain.handle("sidecar:settings", () => svc.settings());
+  ipcMain.handle("sidecar:updateSettings", (_event, patch: Partial<Settings>) => svc.updateSettings(patch));
   ipcMain.handle("sidecar:hooksStatus", () => svc.hooksStatus());
   ipcMain.handle("sidecar:installHooks", () => svc.installHooks());
   ipcMain.handle("sidecar:uninstallHooks", () => svc.uninstallHooks());

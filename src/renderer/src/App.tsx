@@ -8,6 +8,7 @@ import type {
   LiveUsageSnapshot,
   LiveUsageStatus,
   OpenResult,
+  Settings,
   SessionRecord,
   SetupItemRecord,
   SetupKind,
@@ -51,6 +52,7 @@ export default function App() {
   const [clusters, setClusters] = useState<ClusterRecord[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionRecord[]>([]);
   const [hooks, setHooks] = useState<HookStatus[]>([]);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const usageFetchedAtRef = useRef(0);
@@ -69,6 +71,10 @@ export default function App() {
 
   const refreshHooks = useCallback(async () => {
     setHooks(await window.sidecar.hooksStatus());
+  }, []);
+
+  const refreshSettings = useCallback(async () => {
+    setSettings(await window.sidecar.settings());
   }, []);
 
   const refreshTab = useCallback(async (nextTab: Tab) => {
@@ -136,6 +142,7 @@ export default function App() {
     }
     void refreshAgents().catch((err: unknown) => setError(String(err)));
     void refreshHooks().catch((err: unknown) => setError(String(err)));
+    void refreshSettings().catch((err: unknown) => setError(String(err)));
     void refreshTab("usage").catch((err: unknown) => setError(String(err)));
     return window.sidecarEvents.onChanged(() => {
       if (scrollingRef.current) {
@@ -144,7 +151,7 @@ export default function App() {
       }
       refreshCurrentTab();
     });
-  }, [refreshAgents, refreshCurrentTab, refreshHooks, refreshTab]);
+  }, [refreshAgents, refreshCurrentTab, refreshHooks, refreshSettings, refreshTab]);
 
   useEffect(() => {
     return () => {
@@ -263,9 +270,11 @@ export default function App() {
         {tab === "improve" && (
           <ImproveView
             busy={busy}
+            settings={settings}
             candidates={candidates}
             clusters={clusters}
             suggestions={suggestions}
+            onSetting={(patch) => void run(async () => setSettings(await window.sidecar.updateSettings(patch)))}
             onRun={() => void run(() => window.sidecar.runImprove())}
             onApply={(id) => void run(() => window.sidecar.applySuggestion(id))}
             onUndo={(id) => void run(() => window.sidecar.undoSuggestion(id))}
@@ -904,30 +913,80 @@ function fmtReset(iso: string): string {
 
 function ImproveView({
   busy,
+  settings,
   candidates,
   clusters,
   suggestions,
+  onSetting,
   onRun,
   onApply,
   onUndo,
   onDismiss,
 }: {
   busy: boolean;
+  settings: Settings | null;
   candidates: CandidateRecord[];
   clusters: ClusterRecord[];
   suggestions: SuggestionRecord[];
+  onSetting: (patch: Partial<Settings>) => void;
   onRun: () => void;
   onApply: (id: string) => void;
   onUndo: (id: string) => void;
   onDismiss: (id: string) => void;
 }) {
+  if (settings && !settings.improveEnabled) {
+    return (
+      <>
+        <Section title="Improve" />
+        <div className="card">
+          <p className="card-title">Improve is off</p>
+          <p className="muted">
+            Turning it on lets Sidecar read every local transcript for corrections you repeat, and
+            propose edits to the rule files in your repos. Nothing leaves this Mac, and every edit
+            is a diff you approve.
+          </p>
+          <button
+            className="btn primary"
+            disabled={busy}
+            type="button"
+            onClick={() => onSetting({ improveEnabled: true })}
+          >
+            Turn on Improve
+          </button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Section title="Suggestions">
-        <button className="btn primary" disabled={busy} onClick={onRun} type="button">
-          Scan corrections
-        </button>
+        <div className="row">
+          <button className="btn primary" disabled={busy} onClick={onRun} type="button">
+            Scan corrections
+          </button>
+          <button
+            className="btn"
+            disabled={busy}
+            type="button"
+            onClick={() => onSetting({ improveEnabled: false })}
+          >
+            Turn off
+          </button>
+        </div>
         <p className="muted usage-note">Looks through Claude Code, Codex, and Cursor transcripts. Nothing leaves this Mac.</p>
+        <label className="setting-row">
+          <input
+            type="checkbox"
+            checked={settings?.improveGlobalRules ?? false}
+            disabled={busy}
+            onChange={(event) => onSetting({ improveGlobalRules: event.target.checked })}
+          />
+          <span>
+            Also propose edits to ~/.claude/CLAUDE.md. Off by default, because you maintain that file
+            by hand; repo rule files are always fair game.
+          </span>
+        </label>
       </Section>
       {suggestions.length === 0 && (
         <EmptyState

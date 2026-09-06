@@ -257,6 +257,11 @@ export interface HealthReport {
   integrations: IntegrationHealth[];
 }
 
+export interface Settings {
+  improveEnabled: boolean;
+  improveGlobalRules: boolean;
+}
+
 export interface SidecarApi {
   health: () => Promise<HealthReport>;
   ingest: () => Promise<IngestReport>;
@@ -270,6 +275,8 @@ export interface SidecarApi {
   applySuggestion: (id: string) => Promise<ApplyResult>;
   undoSuggestion: (id: string) => Promise<ApplyResult>;
   dismissSuggestion: (id: string) => Promise<void>;
+  settings: () => Promise<Settings>;
+  updateSettings: (patch: Partial<Settings>) => Promise<Settings>;
   hooksStatus: () => Promise<HookStatus[]>;
   installHooks: () => Promise<HookStatus[]>;
   uninstallHooks: () => Promise<HookStatus[]>;
