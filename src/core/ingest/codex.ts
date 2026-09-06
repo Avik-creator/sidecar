@@ -2,7 +2,7 @@ import type { ParsedBatch } from "./claude.js";
 import { emptyBatch } from "./claude.js";
 import { shortHash } from "../hash.js";
 import { asNumber, asRecord, asString, extractText, truncateText } from "../text.js";
-import type { SessionRecord, TurnRecord } from "../../shared/types.js";
+import type { TurnRecord } from "../../shared/types.js";
 
 export function parseCodexLine(filePath: string, line: string, sessionHint?: string): ParsedBatch | "skip" | "fail" {
   let rec: Record<string, unknown>;
@@ -35,25 +35,12 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
       hasBlocking: false,
       isSidechain: asString(payload.thread_source) === "subagent",
     });
-    batch.events.push({
-      sessionId,
-      harness: "codex",
-      type: "session_meta",
-      ts,
-      payloadJson: JSON.stringify({
-        cwd: payload.cwd,
-        model_provider: payload.model_provider,
-        originator: payload.originator,
-      }),
-      sourceEventId: `session_meta:${nativeId}`,
-    });
     return batch;
   }
 
   const nativeId = sessionHint ?? idFromFilename(filePath);
   const sessionId = `codex:${nativeId}`;
   const eventType = type === "event_msg" ? asString(payload.type) : null;
-  const state = codexSessionState(eventType);
   batch.sessions.push({
     id: sessionId,
     harness: "codex",
@@ -63,9 +50,9 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
     worktree: false,
     title: null,
     startedAt: ts,
-    endedAt: state === "ended" ? ts : null,
+    endedAt: null,
     lastTs: ts,
-    state,
+    state: "unknown",
     hasBlocking: false,
     isSidechain: false,
   });
@@ -115,14 +102,6 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
   if (type === "event_msg") {
     const resolvedEventType = eventType ?? "event_msg";
     const sourceEventId = `${resolvedEventType}:${ts}:${shortHash(line).slice(0, 12)}`;
-    batch.events.push({
-      sessionId,
-      harness: "codex",
-      type: resolvedEventType,
-      ts,
-      payloadJson: compactEvent(payload),
-      sourceEventId,
-    });
     if (resolvedEventType === "token_count") {
       const info = asRecord(payload.info);
       const last = asRecord(info?.last_token_usage);
@@ -198,25 +177,4 @@ function mapCodexRole(role: string | null): TurnRecord["role"] | null {
     default:
       return null;
   }
-}
-
-function codexSessionState(eventType: string | null): SessionRecord["state"] {
-  if (eventType === "task_started" || eventType === "turn_started") {
-    return "active";
-  }
-  if (eventType === "task_complete" || eventType === "turn_complete" || eventType === "turn_aborted") {
-    return "ended";
-  }
-  return "unknown";
-}
-
-function compactEvent(payload: Record<string, unknown>): string {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload)) {
-    if (key === "message" || key === "text" || key === "content") {
-      continue;
-    }
-    copy[key] = value;
-  }
-  return JSON.stringify(copy);
 }

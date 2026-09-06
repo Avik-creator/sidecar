@@ -53,8 +53,10 @@ function usdEstimate(
 
 export function buildUsageReport(store: Store, days = 30, timezone = displayTimezone()): UsageReport {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  // A day of slack covers timestamps written with an offset rather than Z; the exact cut is below.
+  const sqlCutoff = new Date(cutoff - 24 * 60 * 60 * 1000).toISOString();
   const grouped = new Map<string, UsageDayRow>();
-  for (const row of store.usageRows()) {
+  for (const row of store.usageRows(sqlCutoff)) {
     const ms = Date.parse(row.ts);
     if (!Number.isFinite(ms) || ms < cutoff) {
       continue;
@@ -128,13 +130,26 @@ export function calendarDaysFromRows(rows: UsageDayRow[]): UsageCalendarDay[] {
   return [...map.values()].sort((a, b) => b.day.localeCompare(a.day));
 }
 
-export function formatDay(ms: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+// Building a formatter costs far more than using one, and this runs once per usage row.
+const DAY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function dayFormatter(timezone: string): Intl.DateTimeFormat {
+  const cached = DAY_FORMATTERS.get(timezone);
+  if (cached) {
+    return cached;
+  }
+  const created = new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date(ms));
+  });
+  DAY_FORMATTERS.set(timezone, created);
+  return created;
+}
+
+export function formatDay(ms: number, timezone: string): string {
+  const parts = dayFormatter(timezone).formatToParts(new Date(ms));
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
   const day = parts.find((part) => part.type === "day")?.value;

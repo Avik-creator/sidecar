@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PARSER_VERSION } from "../constants.js";
 import { Store } from "../db/store.js";
-import { parseClaudeLine, emptyBatch, mergeBatch, type ParsedBatch } from "./claude.js";
+import { parseClaudeLine, emptyBatch, foldSessions, mergeBatch, type ParsedBatch } from "./claude.js";
 import { idFromFilename, parseCodexLine } from "./codex.js";
 import { ingestCursor } from "./cursor.js";
 import { fileIdentity, readJsonlFromOffset, resumeOffset, nextSourceState } from "./jsonl.js";
@@ -10,15 +10,20 @@ import {
   claudeProjectsDir,
   codexSessionsDir,
   cursorStateDb,
-  hooksLogPath,
+  hooksSpoolDir,
 } from "../paths.js";
+import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../hooks/events.js";
+import { clearSpool, readSpool } from "../hooks/spool.js";
 import type { Harness, IngestReport } from "../../shared/types.js";
+
+// Parsed rows are written in batches so one huge transcript never sits in memory whole.
+const FLUSH_TURNS = 2000;
 
 export interface IngestOptions {
   claudeDir?: string;
   codexDir?: string;
   cursorDb?: string;
-  hooksFile?: string;
+  spoolDir?: string;
 }
 
 export function ingestAll(store: Store, options: IngestOptions = {}): IngestReport {
@@ -32,7 +37,7 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
   const claudeDir = options.claudeDir ?? claudeProjectsDir();
   const codexDir = options.codexDir ?? codexSessionsDir();
   const cursorDb = options.cursorDb ?? cursorStateDb();
-  const hooksFile = options.hooksFile ?? hooksLogPath();
+  const spoolDir = options.spoolDir ?? hooksSpoolDir();
 
   const claudeFiles = listJsonl(claudeDir);
   filesSeen += claudeFiles.length;
@@ -94,7 +99,15 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
   if (fs.existsSync(cursorDb)) {
     filesSeen += 1;
     const previous = store.getSourceFile(cursorDb);
-    const result = ingestCursor(cursorDb, previous?.watermark ?? "0");
+    let cursorTurns = 0;
+    let cursorUsage = 0;
+    let cursorRecords = 0;
+    const result = ingestCursor(cursorDb, previous?.watermark ?? "0", (batch) => {
+      const counts = persistBatch(store, batch);
+      cursorTurns += counts.turns;
+      cursorUsage += counts.usage;
+      cursorRecords += batch.turns.length + batch.sessions.length;
+    });
     parseFailures += result.parseFailures;
     if (result.unavailable) {
       store.setHealth({
@@ -106,10 +119,9 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
         lastError: result.error ?? "Cursor database unavailable",
       });
     } else {
-      const counts = persistBatch(store, result.batch);
-      turnsUpserted += counts.turns;
-      usageEvents += counts.usage;
-      recordsRead += result.batch.turns.length + result.batch.sessions.length;
+      turnsUpserted += cursorTurns;
+      usageEvents += cursorUsage;
+      recordsRead += cursorRecords;
       const identity = fileIdentity(cursorDb);
       if (identity) {
         store.upsertSourceFile(nextSourceState(cursorDb, "cursor", identity, 0, result.watermark));
@@ -134,12 +146,32 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
     });
   }
 
-  if (fs.existsSync(hooksFile)) {
-    filesSeen += 1;
-    const result = ingestJsonlFile(store, hooksFile, "claude", (line) => parseHookLine(line));
-    recordsRead += result.recordsRead;
-    parseFailures += result.parseFailures;
+  const spool = readSpool(spoolDir);
+  filesSeen += spool.files.length;
+  recordsRead += spool.events.length;
+  parseFailures += spool.failures;
+  if (spool.events.length > 0) {
+    store.transaction(() => {
+      for (const event of spool.events) {
+        const outcome = hookOutcome(event.harness, event.type);
+        const nativeId = sessionIdFromPayload(event.harness, event.payload);
+        if (!outcome || !nativeId) {
+          continue;
+        }
+        store.applyHookState({
+          sessionId: `${event.harness}:${nativeId}`,
+          harness: event.harness,
+          nativeId,
+          cwd: cwdFromPayload(event.harness, event.payload),
+          state: outcome.state,
+          hasBlocking: outcome.hasBlocking,
+          ts: event.ts,
+          eventType: event.type,
+        });
+      }
+    });
   }
+  clearSpool(spool.files);
 
   return {
     filesSeen,
@@ -167,31 +199,39 @@ function ingestJsonlFile(
     store.upsertSourceFile(nextSourceState(filePath, harness, identity, start, previous.watermark));
     return { recordsRead: 0, turnsUpserted: 0, usageEvents: 0, parseFailures: 0 };
   }
-  const { lines, nextOffset, failures } = readJsonlFromOffset(filePath, start);
   let turnsUpserted = 0;
   let usageEvents = 0;
-  let parseFailures = failures;
-  const combined = emptyBatch();
-  for (const line of lines) {
-    const parsed = parse(line.text);
+  let parseFailures = 0;
+  let recordsRead = 0;
+  let combined = emptyBatch();
+  const flush = (): void => {
+    const counts = persistBatch(store, combined);
+    turnsUpserted += counts.turns;
+    usageEvents += counts.usage;
+    combined = emptyBatch();
+  };
+  const { nextOffset, failures } = readJsonlFromOffset(filePath, start, (text) => {
+    recordsRead += 1;
+    const parsed = parse(text);
     if (parsed === "skip") {
-      continue;
+      return;
     }
     if (parsed === "fail") {
       parseFailures += 1;
-      continue;
+      return;
     }
     mergeBatch(combined, parsed);
-  }
-  const counts = persistBatch(store, combined);
-  turnsUpserted += counts.turns;
-  usageEvents += counts.usage;
+    if (combined.turns.length >= FLUSH_TURNS) {
+      flush();
+    }
+  });
+  flush();
   store.upsertSourceFile(nextSourceState(filePath, harness, identity, nextOffset, previous?.watermark ?? null));
   return {
-    recordsRead: lines.length,
+    recordsRead,
     turnsUpserted,
     usageEvents,
-    parseFailures,
+    parseFailures: parseFailures + failures,
   };
 }
 
@@ -199,7 +239,7 @@ function persistBatch(store: Store, batch: ParsedBatch): { turns: number; usage:
   let turns = 0;
   let usage = 0;
   store.transaction(() => {
-    for (const session of batch.sessions) {
+    for (const session of foldSessions(batch.sessions)) {
       store.upsertSession(session);
     }
     for (const turn of batch.turns) {
@@ -211,9 +251,6 @@ function persistBatch(store: Store, batch: ParsedBatch): { turns: number; usage:
       if (store.insertUsage(event)) {
         usage += 1;
       }
-    }
-    for (const event of batch.events) {
-      store.insertEvent(event);
     }
   });
   return { turns, usage };
@@ -242,45 +279,6 @@ function listJsonl(root: string): string[] {
   };
   walk(root);
   return out.sort();
-}
-
-function parseHookLine(line: string): ParsedBatch | "skip" | "fail" {
-  try {
-    const rec = JSON.parse(line) as Record<string, unknown>;
-    const harness = (rec.harness as Harness | undefined) ?? "claude";
-    const sessionId = typeof rec.sessionId === "string" ? `${harness}:${rec.sessionId}` : null;
-    const ts = typeof rec.ts === "string" ? rec.ts : new Date().toISOString();
-    const type = typeof rec.type === "string" ? rec.type : "hook";
-    const batch = emptyBatch();
-    batch.events.push({
-      sessionId,
-      harness,
-      type,
-      ts,
-      payloadJson: JSON.stringify(rec.payload ?? rec),
-      sourceEventId: typeof rec.id === "string" ? rec.id : `${type}:${ts}`,
-    });
-    if (sessionId && type === "PermissionRequest") {
-      batch.sessions.push({
-        id: sessionId,
-        harness,
-        nativeId: rec.sessionId as string,
-        cwd: null,
-        gitBranch: null,
-        worktree: false,
-        title: null,
-        startedAt: ts,
-        endedAt: null,
-        lastTs: ts,
-        state: "needs_attention",
-        hasBlocking: true,
-        isSidechain: false,
-      });
-    }
-    return batch;
-  } catch {
-    return "fail";
-  }
 }
 
 function isPermissionError(error: unknown): boolean {

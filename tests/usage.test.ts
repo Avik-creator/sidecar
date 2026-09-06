@@ -264,30 +264,28 @@ describe("live usage cache", () => {
     expect(started).toBe(1);
   });
 
-  it("refreshes expired Claude tokens in memory only", async () => {
+  it("never renews an expired token, because renewing can sign the user out of their agent", async () => {
     const urls: string[] = [];
     const persisted: unknown[] = [];
     const request = async (input: HttpRequest): Promise<HttpResponse> => {
       urls.push(input.url);
-      if (input.url.includes("/v1/oauth/token")) {
-        expect(input.bodyText).not.toContain("must-not-leak");
-        return jsonResponse(200, { access_token: "sk-ant-oat01-new", expires_in: 3600 });
-      }
-      expect(input.headers?.Authorization).toBe("Bearer sk-ant-oat01-new");
       return jsonResponse(200, { five_hour: { utilization: 1 } });
     };
-    await fetchLiveUsage({
+    const snapshots = await fetchLiveUsage({
       now: () => 2_000_000,
       request,
       readClaude: () => claudeTokens({ accessToken: "sk-ant-oat01-old", expiresAtMs: 1_000 }),
       readCodex: () => null,
       readCursor: () => null,
-      persist: (snapshots) => {
-        persisted.push(snapshots);
+      persist: (rows) => {
+        persisted.push(rows);
       },
       loadPersisted: () => [],
     });
-    expect(urls.some((url) => url.includes("/v1/oauth/token"))).toBe(true);
+    expect(urls.some((url) => url.includes("oauth/token"))).toBe(false);
+    const claude = snapshots.find((snapshot) => snapshot.provider === "claude");
+    expect(claude?.status).toBe("unauthenticated");
+    expect(claude?.error).toMatch(/expired/i);
     expect(JSON.stringify(persisted)).not.toContain("sk-ant");
   });
 });

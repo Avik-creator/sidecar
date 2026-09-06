@@ -5,6 +5,8 @@ import type { ApplyResult } from "../../shared/types.js";
 import type { Store } from "../db/store.js";
 import { sha256 } from "../hash.js";
 import { backupDir } from "../paths.js";
+import { readSettings } from "../settings.js";
+import { globalRulesPath } from "./plan.js";
 
 const ALLOWED_BASENAMES = new Set(["CLAUDE.md", "AGENTS.md"]);
 
@@ -92,6 +94,9 @@ export function validateTarget(targetFile: string): string {
   const resolved = path.resolve(targetFile);
   if (!ALLOWED_BASENAMES.has(path.basename(resolved))) {
     throw new Error("target must be CLAUDE.md or AGENTS.md");
+  }
+  if (resolved === path.resolve(globalRulesPath()) && !readSettings().improveGlobalRules) {
+    throw new Error("editing your global rules file is turned off in Setup");
   }
   const parent = path.dirname(resolved);
   const realParent = fs.existsSync(parent) ? fs.realpathSync.native(parent) : parent;

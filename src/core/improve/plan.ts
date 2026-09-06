@@ -13,12 +13,19 @@ interface PlannedSuggestion {
   baseHash: string;
 }
 
-export function planCluster(store: Store, cluster: ClusterRecord): PlannedSuggestion | null {
+export function planCluster(
+  store: Store,
+  cluster: ClusterRecord,
+  allowGlobalRules = false,
+): PlannedSuggestion | null {
   const members = store.clusterMembers(cluster.id);
   if (members.length === 0) {
     return null;
   }
-  const targetFile = chooseTarget(members.map((m) => m.cwd));
+  const targetFile = chooseTarget(members.map((m) => m.cwd), allowGlobalRules);
+  if (!targetFile) {
+    return null;
+  }
   const existing = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, "utf8") : "";
   const rule = ruleBlock(cluster, members.map((m) => boundedContext(m.text, 280)));
   if (existing.includes(cluster.canonicalKey) || existing.includes(rule.trim())) {
@@ -33,7 +40,7 @@ export function planCluster(store: Store, cluster: ClusterRecord): PlannedSugges
   };
 }
 
-function chooseTarget(cwds: Array<string | null>): string {
+function chooseTarget(cwds: Array<string | null>, allowGlobalRules: boolean): string | null {
   const counts = new Map<string, number>();
   for (const cwd of cwds) {
     if (!cwd) {
@@ -48,6 +55,11 @@ function chooseTarget(cwds: Array<string | null>): string {
   if (ranked[0] && ranked[0][1] >= 2) {
     return ranked[0][0];
   }
+  // The global rules file is hand-maintained, so Sidecar leaves it alone unless asked.
+  return allowGlobalRules ? globalRulesPath() : null;
+}
+
+export function globalRulesPath(): string {
   return path.join(os.homedir(), ".claude", "CLAUDE.md");
 }
 

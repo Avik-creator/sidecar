@@ -14,12 +14,19 @@ const api: SidecarApi = {
   applySuggestion: (id) => ipcRenderer.invoke("sidecar:applySuggestion", id),
   undoSuggestion: (id) => ipcRenderer.invoke("sidecar:undoSuggestion", id),
   dismissSuggestion: (id) => ipcRenderer.invoke("sidecar:dismissSuggestion", id),
+  settings: () => ipcRenderer.invoke("sidecar:settings"),
+  updateSettings: (patch) => ipcRenderer.invoke("sidecar:updateSettings", patch),
+  hooksStatus: () => ipcRenderer.invoke("sidecar:hooksStatus"),
+  installHooks: () => ipcRenderer.invoke("sidecar:installHooks"),
+  uninstallHooks: () => ipcRenderer.invoke("sidecar:uninstallHooks"),
 };
 
 const shellApi: SidecarShell = {
   setPinned: (pinned) => ipcRenderer.invoke("sidecar:setPinned", pinned),
   hidePanel: () => ipcRenderer.invoke("sidecar:hidePanel"),
   quitApp: () => ipcRenderer.invoke("sidecar:quitApp"),
+  openInEditor: (session) => ipcRenderer.invoke("sidecar:openInEditor", session),
+  openInTerminal: (session) => ipcRenderer.invoke("sidecar:openInTerminal", session),
 };
 
 contextBridge.exposeInMainWorld("sidecar", api);

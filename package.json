@@ -7,7 +7,7 @@
   "type": "module",
   "main": "./out/main/index.js",
   "bin": {
-    "sidecar": "./out/cli/index.js"
+    "sidecar": "./out/main/cli.js"
   },
   "scripts": {
     "postinstall": "node ./node_modules/electron/install.js",

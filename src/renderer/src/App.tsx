@@ -4,8 +4,11 @@ import type {
   ClusterRecord,
   Harness,
   HealthReport,
+  HookStatus,
   LiveUsageSnapshot,
   LiveUsageStatus,
+  OpenResult,
+  Settings,
   SessionRecord,
   SetupItemRecord,
   SetupKind,
@@ -30,6 +33,9 @@ type Tab = "agents" | "setup" | "usage" | "improve";
 
 const USAGE_MIN_REFRESH_MS = 15_000;
 const SCROLL_IDLE_MS = 160;
+// A session idle longer than this is history, not an agent that failed to report.
+const NOT_REPORTING_WINDOW_MS = 60 * 60 * 1000;
+const NOT_REPORTING_MAX_ROWS = 6;
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("agents");
@@ -45,6 +51,8 @@ export default function App() {
   const [candidates, setCandidates] = useState<CandidateRecord[]>([]);
   const [clusters, setClusters] = useState<ClusterRecord[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionRecord[]>([]);
+  const [hooks, setHooks] = useState<HookStatus[]>([]);
+  const [settings, setSettings] = useState<Settings | null>(null);
   const tabRef = useRef(tab);
   tabRef.current = tab;
   const usageFetchedAtRef = useRef(0);
@@ -61,6 +69,14 @@ export default function App() {
     setSessions(nextSessions);
   }, []);
 
+  const refreshHooks = useCallback(async () => {
+    setHooks(await window.sidecar.hooksStatus());
+  }, []);
+
+  const refreshSettings = useCallback(async () => {
+    setSettings(await window.sidecar.settings());
+  }, []);
+
   const refreshTab = useCallback(async (nextTab: Tab) => {
     switch (nextTab) {
       case "agents":
@@ -68,6 +84,7 @@ export default function App() {
         return;
       case "setup":
         setSetup(await window.sidecar.setup());
+        await refreshHooks();
         return;
       case "usage":
         setUsage(await window.sidecar.usage(30));
@@ -89,7 +106,7 @@ export default function App() {
         return exhaustive;
       }
     }
-  }, [refreshAgents]);
+  }, [refreshAgents, refreshHooks]);
 
   const refreshCurrentTab = useCallback(() => {
     const current = tabRef.current;
@@ -124,6 +141,8 @@ export default function App() {
       }
     }
     void refreshAgents().catch((err: unknown) => setError(String(err)));
+    void refreshHooks().catch((err: unknown) => setError(String(err)));
+    void refreshSettings().catch((err: unknown) => setError(String(err)));
     void refreshTab("usage").catch((err: unknown) => setError(String(err)));
     return window.sidecarEvents.onChanged(() => {
       if (scrollingRef.current) {
@@ -132,7 +151,7 @@ export default function App() {
       }
       refreshCurrentTab();
     });
-  }, [refreshAgents, refreshCurrentTab, refreshTab]);
+  }, [refreshAgents, refreshCurrentTab, refreshHooks, refreshSettings, refreshTab]);
 
   useEffect(() => {
     return () => {
@@ -176,7 +195,7 @@ export default function App() {
     setBusy(true);
     try {
       await fn();
-      await Promise.all([refreshAgents(), refreshTab(tab)]);
+      await Promise.all([refreshAgents(), refreshHooks(), refreshTab(tab)]);
     } finally {
       setBusy(false);
     }
@@ -231,19 +250,31 @@ export default function App() {
         {tab === "agents" && (
           <AgentsView
             sessions={sessions}
+            hooks={hooks}
             query={query}
             searchOpen={searchOpen}
             onQuery={setQuery}
+            onOpenSetup={() => setTab("setup")}
           />
         )}
-        {tab === "setup" && <SetupView items={setup} />}
+        {tab === "setup" && (
+          <SetupView
+            items={setup}
+            hooks={hooks}
+            busy={busy}
+            onInstall={() => void run(() => window.sidecar.installHooks())}
+            onUninstall={() => void run(() => window.sidecar.uninstallHooks())}
+          />
+        )}
         {tab === "usage" && <UsageView usage={usage} />}
         {tab === "improve" && (
           <ImproveView
             busy={busy}
+            settings={settings}
             candidates={candidates}
             clusters={clusters}
             suggestions={suggestions}
+            onSetting={(patch) => void run(async () => setSettings(await window.sidecar.updateSettings(patch)))}
             onRun={() => void run(() => window.sidecar.runImprove())}
             onApply={(id) => void run(() => window.sidecar.applySuggestion(id))}
             onUndo={(id) => void run(() => window.sidecar.undoSuggestion(id))}
@@ -278,14 +309,18 @@ export default function App() {
 
 function AgentsView({
   sessions,
+  hooks,
   query,
   searchOpen,
   onQuery,
+  onOpenSetup,
 }: {
   sessions: SessionRecord[];
+  hooks: HookStatus[];
   query: string;
   searchOpen: boolean;
   onQuery: (value: string) => void;
+  onOpenSetup: () => void;
 }) {
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -305,7 +340,12 @@ function AgentsView({
     const subagents = rows.filter(
       (session) => session.state === "active" && !session.hasBlocking && session.isSidechain,
     );
-    return { needs, running, subagents };
+    // Recently touched but never reported through a hook, so Sidecar cannot say what it is doing.
+    const cutoff = Date.now() - NOT_REPORTING_WINDOW_MS;
+    const silent = rows.filter(
+      (session) => session.state === "unknown" && Date.parse(session.lastTs ?? "") >= cutoff,
+    );
+    return { needs, running, subagents, silent };
   }, [sessions, query]);
 
   return (
@@ -319,6 +359,7 @@ function AgentsView({
           onChange={(event) => onQuery(event.target.value)}
         />
       )}
+      <HooksBanner hooks={hooks} onOpenSetup={onOpenSetup} />
       {filtered.needs.length > 0 && (
         <Section title="Needs you">
           {filtered.needs.map((session) => (
@@ -343,11 +384,50 @@ function AgentsView({
           ))}
         </Section>
       )}
+      {filtered.silent.length > 0 && (
+        <Section title="Not reporting">
+          {filtered.silent.slice(0, NOT_REPORTING_MAX_ROWS).map((session) => (
+            <AgentCard key={session.id} session={session} />
+          ))}
+          {filtered.silent.length > NOT_REPORTING_MAX_ROWS && (
+            <p className="muted usage-note">
+              {filtered.silent.length - NOT_REPORTING_MAX_ROWS} more without hook events.
+            </p>
+          )}
+        </Section>
+      )}
     </>
   );
 }
 
+function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup: () => void }) {
+  const missing = hooks.filter((status) => !status.installed);
+  if (missing.length === 0) {
+    return null;
+  }
+  return (
+    <div className="card hooks-banner">
+      <p className="card-title">No live state from {joinLabels(missing.map((s) => providerLabel(s.harness)))}</p>
+      <p className="muted">
+        Agents report what they are doing through hooks. Until those are installed Sidecar can list
+        sessions but cannot tell you which ones need you.
+      </p>
+      <button className="btn primary" type="button" onClick={onOpenSetup}>
+        Install hooks
+      </button>
+    </div>
+  );
+}
+
+function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) {
+    return labels[0] ?? "";
+  }
+  return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
+}
+
 function AgentCard({ session, attention = false }: { session: SessionRecord; attention?: boolean }) {
+  const [note, setNote] = useState<string | null>(null);
   const status =
     session.state === "needs_attention" || session.hasBlocking
       ? "waiting"
@@ -355,7 +435,9 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
         ? "subagent"
         : session.state === "active"
           ? "working"
-          : "idle";
+          : session.state === "unknown"
+            ? "silent"
+            : "idle";
   return (
     <article className={`card ${attention ? "attention" : ""}`}>
       <div className="agent-card-top">
@@ -371,11 +453,43 @@ function AgentCard({ session, attention = false }: { session: SessionRecord; att
         <span className={`status-pill ${status}`}>{status}</span>
         <span className={`spin ${session.state === "active" ? "" : "idle"}`} />
       </div>
+      {session.cwd && (
+        <div className="row card-actions">
+          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>
+            Editor
+          </button>
+          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInTerminal)}>
+            Terminal
+          </button>
+        </div>
+      )}
+      {note && <p className="muted card-note">{note}</p>}
     </article>
   );
+
+  async function openWith(open: (target: SessionRecord) => Promise<OpenResult>): Promise<void> {
+    try {
+      const result = await open(session);
+      setNote(result.ok ? null : (result.error ?? "Could not open this session."));
+    } catch (error) {
+      setNote(String(error));
+    }
+  }
 }
 
-const SetupView = memo(function SetupView({ items }: { items: SetupItemRecord[] }) {
+const SetupView = memo(function SetupView({
+  items,
+  hooks,
+  busy,
+  onInstall,
+  onUninstall,
+}: {
+  items: SetupItemRecord[];
+  hooks: HookStatus[];
+  busy: boolean;
+  onInstall: () => void;
+  onUninstall: () => void;
+}) {
   const [kind, setKind] = useState<"all" | SetupKind>("all");
   const [source, setSource] = useState<"all" | SetupSource>("all");
   const sources = useMemo(
@@ -403,8 +517,39 @@ const SetupView = memo(function SetupView({ items }: { items: SetupItemRecord[] 
   const skillCount = items.filter((item) => item.kind === "skill").length;
   const mcpCount = items.filter((item) => item.kind === "mcp").length;
 
+  const allInstalled = hooks.length > 0 && hooks.every((status) => status.installed);
+
   return (
     <>
+      <Section title="Reporting" />
+      {hooks.map((status) => (
+        <div className="card hook-status" key={status.harness}>
+          <div className="agent-card-top">
+            <span className={`harness-badge ${status.harness}`}>
+              <HarnessMark harness={status.harness} />
+              {providerLabel(status.harness)}
+            </span>
+            <span className={`status-pill ${status.installed ? "working" : "waiting"}`}>
+              {hookStateLabel(status)}
+            </span>
+          </div>
+          <p className="muted">{shortHomePath(status.configPath)}</p>
+          {status.note && <p className="muted hook-note">{status.note}</p>}
+        </div>
+      ))}
+      <div className="row hook-actions">
+        <button className="btn primary" disabled={busy} type="button" onClick={onInstall}>
+          {allInstalled ? "Reinstall hooks" : "Install hooks"}
+        </button>
+        <button className="btn" disabled={busy} type="button" onClick={onUninstall}>
+          Remove hooks
+        </button>
+      </div>
+      <p className="muted usage-note">
+        Sidecar adds one entry per event to each agent's hook config. It backs the file up first and
+        leaves entries owned by other tools alone.
+      </p>
+      <Section title="Installed" />
       <div className="setup-summary">
         <button type="button" onClick={() => setKind("skill")}>
           <strong>{skillCount}</strong>
@@ -515,6 +660,17 @@ function setupSourceLabel(source: SetupSource): string {
       return exhaustive;
     }
   }
+}
+
+function hookStateLabel(status: HookStatus): string {
+  if (status.installed) {
+    return "Reporting";
+  }
+  return status.present.length > 0 ? `Missing ${status.missing.length}` : "Not installed";
+}
+
+function shortHomePath(value: string): string {
+  return value.replace(/^\/(?:Users|home)\/[^/]+/, "~");
 }
 
 function setupKindLabel(kind: SetupKind): string {
@@ -757,30 +913,80 @@ function fmtReset(iso: string): string {
 
 function ImproveView({
   busy,
+  settings,
   candidates,
   clusters,
   suggestions,
+  onSetting,
   onRun,
   onApply,
   onUndo,
   onDismiss,
 }: {
   busy: boolean;
+  settings: Settings | null;
   candidates: CandidateRecord[];
   clusters: ClusterRecord[];
   suggestions: SuggestionRecord[];
+  onSetting: (patch: Partial<Settings>) => void;
   onRun: () => void;
   onApply: (id: string) => void;
   onUndo: (id: string) => void;
   onDismiss: (id: string) => void;
 }) {
+  if (settings && !settings.improveEnabled) {
+    return (
+      <>
+        <Section title="Improve" />
+        <div className="card">
+          <p className="card-title">Improve is off</p>
+          <p className="muted">
+            Turning it on lets Sidecar read every local transcript for corrections you repeat, and
+            propose edits to the rule files in your repos. Nothing leaves this Mac, and every edit
+            is a diff you approve.
+          </p>
+          <button
+            className="btn primary"
+            disabled={busy}
+            type="button"
+            onClick={() => onSetting({ improveEnabled: true })}
+          >
+            Turn on Improve
+          </button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Section title="Suggestions">
-        <button className="btn primary" disabled={busy} onClick={onRun} type="button">
-          Scan corrections
-        </button>
+        <div className="row">
+          <button className="btn primary" disabled={busy} onClick={onRun} type="button">
+            Scan corrections
+          </button>
+          <button
+            className="btn"
+            disabled={busy}
+            type="button"
+            onClick={() => onSetting({ improveEnabled: false })}
+          >
+            Turn off
+          </button>
+        </div>
         <p className="muted usage-note">Looks through Claude Code, Codex, and Cursor transcripts. Nothing leaves this Mac.</p>
+        <label className="setting-row">
+          <input
+            type="checkbox"
+            checked={settings?.improveGlobalRules ?? false}
+            disabled={busy}
+            onChange={(event) => onSetting({ improveGlobalRules: event.target.checked })}
+          />
+          <span>
+            Also propose edits to ~/.claude/CLAUDE.md. Off by default, because you maintain that file
+            by hand; repo rule files are always fair game.
+          </span>
+        </label>
       </Section>
       {suggestions.length === 0 && (
         <EmptyState

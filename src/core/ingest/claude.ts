@@ -1,29 +1,53 @@
-import type { Harness, SessionRecord, TurnRecord, UsageEventRecord } from "../../shared/types.js";
+import type { SessionRecord, TurnRecord, UsageEventRecord } from "../../shared/types.js";
 import { asBool, asNumber, asRecord, asString, extractText, truncateText } from "../text.js";
 
 export interface ParsedBatch {
   sessions: SessionRecord[];
   turns: TurnRecord[];
   usage: UsageEventRecord[];
-  events: Array<{
-    sessionId: string | null;
-    harness: Harness;
-    type: string;
-    ts: string;
-    payloadJson: string;
-    sourceEventId: string;
-  }>;
 }
 
 export function emptyBatch(): ParsedBatch {
-  return { sessions: [], turns: [], usage: [], events: [] };
+  return { sessions: [], turns: [], usage: [] };
+}
+
+// Every transcript line carries its session, so a batch holds thousands of copies of a few rows.
+// Folds them the way upsertSession's conflict clause would, leaving one write per session.
+export function foldSessions(sessions: SessionRecord[]): SessionRecord[] {
+  const byId = new Map<string, SessionRecord>();
+  for (const next of sessions) {
+    const current = byId.get(next.id);
+    if (!current) {
+      byId.set(next.id, next);
+      continue;
+    }
+    byId.set(next.id, {
+      ...next,
+      cwd: next.cwd ?? current.cwd,
+      gitBranch: next.gitBranch ?? current.gitBranch,
+      title: next.title ?? current.title,
+      startedAt: current.startedAt ?? next.startedAt,
+      endedAt: next.endedAt ?? current.endedAt,
+      lastTs: laterOf(current.lastTs, next.lastTs),
+    });
+  }
+  return [...byId.values()];
+}
+
+function laterOf(a: string | null, b: string | null): string | null {
+  if (!a) {
+    return b;
+  }
+  if (!b) {
+    return a;
+  }
+  return b > a ? b : a;
 }
 
 export function mergeBatch(into: ParsedBatch, extra: ParsedBatch): void {
   into.sessions.push(...extra.sessions);
   into.turns.push(...extra.turns);
   into.usage.push(...extra.usage);
-  into.events.push(...extra.events);
 }
 
 export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "skip" | "fail" {
@@ -47,9 +71,9 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
   const cwd = asString(rec.cwd);
   const gitBranch = asString(rec.gitBranch);
   const isSidechain = asBool(rec.isSidechain);
-  const state = claudeSessionState(rec, type);
   const batch = emptyBatch();
 
+  // Transcripts supply content only; hook events are the sole source of session state.
   batch.sessions.push({
     id,
     harness: "claude",
@@ -59,9 +83,9 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     worktree: false,
     title: type === "ai-title" ? asString(rec.aiTitle) : null,
     startedAt: ts,
-    endedAt: state === "ended" ? ts : null,
+    endedAt: null,
     lastTs: ts,
-    state,
+    state: "unknown",
     hasBlocking: false,
     isSidechain,
   });
@@ -115,25 +139,6 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     }
   }
 
-  if (type === "permission-mode") {
-    batch.sessions[0] = {
-      ...batch.sessions[0]!,
-      hasBlocking: false,
-      state: "active",
-    };
-  }
-
-  if (type !== "user" && type !== "assistant") {
-    batch.events.push({
-      sessionId: id,
-      harness: "claude",
-      type,
-      ts,
-      payloadJson: compactPayload(rec),
-      sourceEventId: asString(rec.uuid) ?? `${type}:${ts}`,
-    });
-  }
-
   return batch;
 }
 
@@ -179,29 +184,4 @@ function sessionIdFromPath(filePath: string): string | null {
     return base.slice(0, -".jsonl".length);
   }
   return null;
-}
-
-function claudeSessionState(rec: Record<string, unknown>, type: string): SessionRecord["state"] {
-  if (type === "result" || type === "system" && asString(rec.subtype) === "session_end") {
-    return "ended";
-  }
-  if (type === "assistant") {
-    const stopReason = asString(rec.stopReason) ?? asString(asRecord(rec.message)?.stop_reason);
-    return stopReason ? "ended" : "active";
-  }
-  if (type === "user") {
-    return "active";
-  }
-  return "unknown";
-}
-
-function compactPayload(rec: Record<string, unknown>): string {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(rec)) {
-    if (key === "message" || key === "content" || key === "snapshot" || key === "attachment") {
-      continue;
-    }
-    copy[key] = value;
-  }
-  return JSON.stringify(copy);
 }

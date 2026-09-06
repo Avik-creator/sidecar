@@ -96,7 +96,11 @@ Usage:
   sidecar undo <id>
   sidecar dismiss <id>
   sidecar health
-  sidecar hook --harness claude --type PermissionRequest [--session <id>]
+  sidecar hook --harness claude --type Stop [--session <id>]
+
+Hooks are normally installed from Setup in the app, which writes
+~/.sidecar/bin/sidecar-hook and wires it into each agent's config.
+The command above is the manual equivalent: it spools one event.
 
 DB: ${dbPath()}
 `);

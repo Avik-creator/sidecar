@@ -1,23 +1,25 @@
-import { app, BrowserWindow, ipcMain, Menu, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import chokidar from "chokidar";
 import { SidecarService } from "../core/app.js";
-import {
-  claudeProjectsDir,
-  codexSessionsDir,
-  cursorStateDb,
-  hooksLogPath,
-} from "../core/paths.js";
+import { cursorStateDb, hooksSpoolDir } from "../core/paths.js";
 import { IngestWorkerClient } from "./ingest-worker-client.js";
 import { createTrayImage } from "./tray-icon.js";
+import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
+import { editorCandidates, existingDir, findExecutable, launch } from "./open-in.js";
+import { attentionIds, needsYou, newlyNeedingYou } from "./attention.js";
+import type { OpenResult, SessionRecord, Settings } from "../shared/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PANEL_WIDTH = 400;
 const PANEL_HEIGHT = 700;
 const POLL_INTERVAL_MS = 1000;
 const TRAY_REFRESH_INTERVAL_MS = 5000;
+const FALLBACK_INGEST_MS = 30_000;
+// A batch ingest can flip several sessions at once; three banners is already plenty.
+const MAX_NOTIFICATIONS_PER_REFRESH = 3;
 
 let service: SidecarService | null = null;
 let ingestWorker: IngestWorkerClient | null = null;
@@ -31,6 +33,8 @@ let refreshInFlight: Promise<void> | null = null;
 let refreshQueued = false;
 let lastSourceSignature = "";
 let lastTrayRefreshAt = 0;
+let lastIngestAt = 0;
+let attentionSeen: Set<string> | null = null;
 
 function resolvePreload(): string {
   const candidates = [
@@ -162,10 +166,16 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:candidates", (_event, limit?: number) => svc.candidates(limit));
   ipcMain.handle("sidecar:clusters", () => svc.clusters());
   ipcMain.handle("sidecar:suggestions", () => svc.suggestions());
-  ipcMain.handle("sidecar:runImprove", () => svc.runImprove());
-  ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => svc.applySuggestion(id));
-  ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => svc.undoSuggestion(id));
-  ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => svc.dismissSuggestion(id));
+  // Improve writes, so it runs on the worker; the main store connection stays read-only.
+  ipcMain.handle("sidecar:runImprove", () => getIngestWorker().runImprove());
+  ipcMain.handle("sidecar:applySuggestion", (_event, id: string) => getIngestWorker().applySuggestion(id));
+  ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => getIngestWorker().undoSuggestion(id));
+  ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => getIngestWorker().dismissSuggestion(id));
+  ipcMain.handle("sidecar:settings", () => svc.settings());
+  ipcMain.handle("sidecar:updateSettings", (_event, patch: Partial<Settings>) => svc.updateSettings(patch));
+  ipcMain.handle("sidecar:hooksStatus", () => svc.hooksStatus());
+  ipcMain.handle("sidecar:installHooks", () => svc.installHooks());
+  ipcMain.handle("sidecar:uninstallHooks", () => svc.uninstallHooks());
   ipcMain.handle("sidecar:setPinned", (_event, next: boolean) => {
     pinned = next;
     panel?.setAlwaysOnTop(true);
@@ -176,6 +186,8 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:quitApp", () => {
     app.quit();
   });
+  ipcMain.handle("sidecar:openInEditor", (_event, session: SessionRecord) => openInEditor(session));
+  ipcMain.handle("sidecar:openInTerminal", (_event, session: SessionRecord) => openInTerminal(session));
 }
 
 function scheduleIngest(): void {
@@ -207,6 +219,7 @@ async function refreshFromDisk(): Promise<void> {
 async function runRefresh(): Promise<void> {
   try {
     await getIngestWorker().ingest();
+    lastIngestAt = Date.now();
     await updateTrayBadge();
     panel?.webContents.send("sidecar:changed");
   } catch (error) {
@@ -222,6 +235,11 @@ function pollSources(): void {
     void refreshFromDisk();
     return;
   }
+  // Safety net for anything the watcher misses (network volumes, dropped FSEvents).
+  if (Date.now() - lastIngestAt >= FALLBACK_INGEST_MS) {
+    void refreshFromDisk();
+    return;
+  }
   if (Date.now() - lastTrayRefreshAt >= TRAY_REFRESH_INTERVAL_MS) {
     lastTrayRefreshAt = Date.now();
     void updateTrayBadge();
@@ -230,7 +248,7 @@ function pollSources(): void {
 
 function sourceSignature(): string {
   const parts: string[] = [];
-  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksLogPath()]) {
+  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksSpoolDir()]) {
     try {
       const stat = fs.statSync(filePath);
       parts.push(`${stat.size}:${stat.mtimeMs}`);
@@ -242,36 +260,93 @@ function sourceSignature(): string {
 }
 
 async function updateTrayBadge(): Promise<void> {
+  const sessions = await getService().sessions();
+  const attention = sessions.filter(needsYou);
+  notifyAttention(sessions);
   if (!tray) {
     return;
   }
-  const sessions = await getService().sessions();
-  const attention = sessions.filter((session) => session.state === "needs_attention" || session.hasBlocking).length;
-  tray.setToolTip(attention > 0 ? `Sidecar — ${attention} need you` : "Sidecar");
-  tray.setTitle(attention > 0 ? String(attention) : "");
+  tray.setToolTip(attention.length > 0 ? `Sidecar — ${attention.length} need you` : "Sidecar");
+  tray.setTitle(attention.length > 0 ? String(attention.length) : "");
+}
+
+function notifyAttention(sessions: SessionRecord[]): void {
+  const previous = attentionSeen;
+  attentionSeen = attentionIds(sessions);
+  if (!Notification.isSupported()) {
+    return;
+  }
+  for (const session of newlyNeedingYou(previous, sessions, MAX_NOTIFICATIONS_PER_REFRESH)) {
+    const notification = new Notification({
+      title: `${harnessLabel(session.harness)} ${session.hasBlocking ? "needs permission" : "is waiting on you"}`,
+      body: session.activity || session.title || repoName(session.cwd) || session.nativeId.slice(0, 8),
+    });
+    notification.on("click", () => {
+      if (!panel?.isVisible()) {
+        togglePanel();
+      }
+    });
+    notification.show();
+  }
+}
+
+function harnessLabel(harness: SessionRecord["harness"]): string {
+  return harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : "Cursor";
+}
+
+function repoName(cwd: string | null): string | null {
+  return cwd?.split("/").filter(Boolean).at(-1) ?? null;
+}
+
+async function openInEditor(session: SessionRecord): Promise<OpenResult> {
+  const dir = existingDir(session.cwd);
+  if (!dir) {
+    return { ok: false, opened: null, error: "This session has no folder on this Mac." };
+  }
+  for (const name of editorCandidates(session.harness)) {
+    const command = findExecutable(name);
+    if (command) {
+      launch(command, [dir]);
+      return { ok: true, opened: path.basename(command), error: null };
+    }
+  }
+  const failure = await shell.openPath(dir);
+  return failure
+    ? { ok: false, opened: null, error: failure }
+    : { ok: true, opened: "Finder", error: null };
+}
+
+async function openInTerminal(session: SessionRecord): Promise<OpenResult> {
+  const dir = existingDir(session.cwd);
+  if (!dir) {
+    return { ok: false, opened: null, error: "This session has no folder on this Mac." };
+  }
+  if (process.platform !== "darwin") {
+    const failure = await shell.openPath(dir);
+    return failure
+      ? { ok: false, opened: null, error: failure }
+      : { ok: true, opened: "file manager", error: null };
+  }
+  const terminal = process.env.SIDECAR_TERMINAL?.trim() || "Terminal";
+  launch("/usr/bin/open", ["-a", terminal, dir]);
+  return { ok: true, opened: terminal, error: null };
 }
 
 function watchSources(): void {
-  const watcher = chokidar.watch(
-    [
-      path.join(claudeProjectsDir(), "**/*.jsonl"),
-      path.join(codexSessionsDir(), "**/*.jsonl"),
-      cursorStateDb(),
-      `${cursorStateDb()}-wal`,
-      hooksLogPath(),
-    ],
-    {
-      ignoreInitial: true,
-      ignorePermissionErrors: true,
-      ignored: (filePath) => shouldIgnoreWatchPath(filePath),
-      awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 50 },
-    },
-  );
+  const paths = watchPaths();
+  const watcher = chokidar.watch(watchRoots(paths), {
+    ignoreInitial: true,
+    ignorePermissionErrors: true,
+    ignored: (filePath) => shouldIgnoreWatchPath(filePath),
+    awaitWriteFinish: { stabilityThreshold: 120, pollInterval: 50 },
+  });
   watcher.on("error", (error) => {
     console.warn("watch error", error);
   });
-  watcher.on("all", () => {
-    scheduleIngest();
+  watcher.on("all", (_event, changed) => {
+    if (isRelevantChange(changed, paths)) {
+      scheduleIngest();
+    }
   });
   app.on("before-quit", () => {
     void watcher.close();

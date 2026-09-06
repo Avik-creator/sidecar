@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { SCHEMA_SQL } from "./schema.js";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { migrate } from "./migrate.js";
 import type {
   CandidateRecord,
   ClusterRecord,
@@ -24,15 +24,27 @@ function openDatabase(filePath: string): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(SCHEMA_SQL);
+  migrate(db);
   return db;
 }
 
 export class Store {
   readonly db: DatabaseSync;
+  // A cold ingest runs the same handful of writes hundreds of thousands of times.
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(db: DatabaseSync) {
     this.db = db;
+  }
+
+  private statement(sql: string): StatementSync {
+    const cached = this.statements.get(sql);
+    if (cached) {
+      return cached;
+    }
+    const prepared = this.db.prepare(sql);
+    this.statements.set(sql, prepared);
+    return prepared;
   }
 
   static open(filePath: string): Store {
@@ -40,6 +52,7 @@ export class Store {
   }
 
   close(): void {
+    this.statements.clear();
     this.db.close();
   }
 
@@ -68,8 +81,8 @@ export class Store {
   }
 
   upsertSourceFile(state: SourceFileState): void {
-    this.db
-      .prepare(
+    this
+      .statement(
         `INSERT INTO source_file(path, harness, inode, size, mtime_ms, byte_offset, parser_version, watermark)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
@@ -94,10 +107,11 @@ export class Store {
   }
 
   upsertSession(session: SessionRecord): void {
-    this.db
-      .prepare(
+    this
+      .statement(
+        // state and has_blocking are literals here: only hook events may set them.
         `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
            git_branch = COALESCE(excluded.git_branch, session.git_branch),
@@ -106,15 +120,8 @@ export class Store {
            started_at = COALESCE(session.started_at, excluded.started_at),
            ended_at = COALESCE(excluded.ended_at, session.ended_at),
            last_ts = CASE
-             WHEN excluded.state = 'unknown' THEN session.last_ts
              WHEN excluded.last_ts IS NOT NULL AND (session.last_ts IS NULL OR excluded.last_ts > session.last_ts)
              THEN excluded.last_ts ELSE session.last_ts END,
-           state = CASE
-             WHEN excluded.state = 'unknown' THEN session.state
-             ELSE excluded.state END,
-           has_blocking = CASE
-             WHEN excluded.state = 'unknown' THEN session.has_blocking
-             ELSE excluded.has_blocking END,
            is_sidechain = excluded.is_sidechain`,
       )
       .run(
@@ -128,15 +135,51 @@ export class Store {
         session.startedAt,
         session.endedAt,
         session.lastTs,
-        session.state,
-        session.hasBlocking ? 1 : 0,
         session.isSidechain ? 1 : 0,
       );
   }
 
+  // Hook events are the only writer of session state.
+  applyHookState(row: HookStateWrite): void {
+    this
+      .statement(
+        `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           cwd = COALESCE(excluded.cwd, session.cwd),
+           state = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.state ELSE session.state END,
+           has_blocking = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.has_blocking ELSE session.has_blocking END,
+           hook_event = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.hook_event ELSE session.hook_event END,
+           hook_ts = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.hook_ts ELSE session.hook_ts END,
+           last_ts = CASE
+             WHEN session.last_ts IS NULL OR excluded.last_ts > session.last_ts
+             THEN excluded.last_ts ELSE session.last_ts END`,
+      )
+      .run(
+        row.sessionId,
+        row.harness,
+        row.nativeId,
+        row.cwd,
+        row.state,
+        row.hasBlocking ? 1 : 0,
+        row.ts,
+        row.eventType,
+        row.ts,
+        row.ts,
+      );
+  }
+
   insertTurn(turn: TurnRecord): boolean {
-    const result = this.db
-      .prepare(
+    const result = this
+      .statement(
         `INSERT OR IGNORE INTO turn(
            id, session_id, source_event_id, role, ts, model, text,
            tokens_in, tokens_out, cache_read, cache_write,
@@ -169,8 +212,8 @@ export class Store {
   }
 
   insertUsage(event: UsageEventRecord): boolean {
-    const result = this.db
-      .prepare(
+    const result = this
+      .statement(
         `INSERT OR IGNORE INTO usage_event(
            session_id, turn_id, source_event_id, harness, ts, model,
            tokens_in, tokens_out, cache_read, cache_write
@@ -189,29 +232,6 @@ export class Store {
         event.cacheWrite,
       );
     return Number(result.changes) > 0;
-  }
-
-  insertEvent(event: {
-    sessionId: string | null;
-    harness: Harness;
-    type: string;
-    ts: string;
-    payloadJson: string;
-    sourceEventId: string;
-  }): void {
-    this.db
-      .prepare(
-        `INSERT OR IGNORE INTO event(session_id, harness, type, ts, payload_json, source_event_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        event.sessionId,
-        event.harness,
-        event.type,
-        event.ts,
-        event.payloadJson,
-        event.sourceEventId,
-      );
   }
 
   replaceCandidates(rows: Array<{ turnId: string; signals: string[]; score: number; createdAt: string }>): void {
@@ -329,16 +349,7 @@ export class Store {
                     SELECT t.role FROM turn t
                     WHERE t.session_id = s.id AND t.role IN ('user', 'assistant')
                     ORDER BY t.ts DESC LIMIT 1
-                  ) AS last_role,
-                  s.harness = 'claude' AND s.has_blocking = 1 AND EXISTS (
-                    SELECT 1 FROM event e
-                    WHERE e.session_id = s.id
-                      AND e.type = 'PermissionRequest'
-                      AND e.ts > COALESCE((
-                        SELECT MAX(t.ts) FROM turn t
-                        WHERE t.session_id = s.id
-                      ), '')
-                  ) AS pending_permission
+                  ) AS last_role
            FROM session s
            ORDER BY COALESCE(s.last_ts, s.started_at) DESC
            LIMIT ?`,
@@ -415,7 +426,7 @@ export class Store {
     return { sessions, turns, candidates, suggestions };
   }
 
-  usageRows(): Array<{
+  usageRows(since: string | null = null): Array<{
     ts: string;
     harness: Harness;
     model: string | null;
@@ -424,8 +435,11 @@ export class Store {
     cacheRead: number;
     cacheWrite: number;
   }> {
+    const select = `SELECT ts, harness, model, tokens_in, tokens_out, cache_read, cache_write FROM usage_event`;
     const rows = asRows<UsageRow[]>(
-      this.db.prepare(`SELECT ts, harness, model, tokens_in, tokens_out, cache_read, cache_write FROM usage_event`).all(),
+      since
+        ? this.db.prepare(`${select} WHERE ts >= ?`).all(since)
+        : this.db.prepare(select).all(),
     );
     return rows.map((row) => ({
       ts: row.ts,
@@ -496,9 +510,21 @@ interface SessionRow {
   state: string;
   has_blocking: number;
   is_sidechain: number;
+  hook_ts?: string | null;
+  hook_event?: string | null;
   last_text?: string | null;
   last_role?: string | null;
-  pending_permission?: number;
+}
+
+export interface HookStateWrite {
+  sessionId: string;
+  harness: Harness;
+  nativeId: string;
+  cwd: string | null;
+  state: SessionRecord["state"];
+  hasBlocking: boolean;
+  ts: string;
+  eventType: string;
 }
 
 interface TurnRow {
@@ -600,12 +626,6 @@ function mapSourceFile(row: SourceFileRow): SourceFileState {
 }
 
 function mapSession(row: SessionRow): SessionRecord {
-  const hasBlocking =
-    row.harness === "claude" ? row.pending_permission === 1 : row.has_blocking === 1;
-  const state =
-    row.harness === "claude" && row.state === "needs_attention" && !hasBlocking
-      ? "unknown"
-      : row.state as SessionRecord["state"];
   return {
     id: row.id,
     harness: row.harness as Harness,
@@ -617,8 +637,10 @@ function mapSession(row: SessionRow): SessionRecord {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     lastTs: row.last_ts,
-    state,
-    hasBlocking,
+    state: row.state as SessionRecord["state"],
+    hasBlocking: row.has_blocking === 1,
+    hookTs: row.hook_ts ?? null,
+    hookEvent: row.hook_event ?? null,
     isSidechain: row.is_sidechain === 1,
     activity: firstActivity(row.title, row.last_text, row.cwd),
     lastRole: row.last_role === "user" || row.last_role === "assistant" ? row.last_role : null,

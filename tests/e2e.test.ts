@@ -7,6 +7,7 @@ import { applySuggestion, undoSuggestion, validateTarget } from "../src/core/imp
 import { ingestAll } from "../src/core/ingest/engine.js";
 import { runImprove } from "../src/core/improve/pipeline.js";
 import { buildUsageReport } from "../src/core/usage/report.js";
+import { writeSettings } from "../src/core/settings.js";
 import { SidecarService } from "../src/core/app.js";
 
 const tmpDirs: string[] = [];
@@ -96,7 +97,7 @@ describe("store uniqueness", () => {
     db.close();
   });
 
-  it("only reports a Claude permission request while it is actually pending", () => {
+  it("keeps a transcript-only session stateless and lets hooks drive it", () => {
     const dir = tmp();
     const db = Store.open(path.join(dir, "db.sqlite"));
     db.upsertSession({
@@ -114,41 +115,37 @@ describe("store uniqueness", () => {
       hasBlocking: true,
       isSidechain: false,
     });
-
+    // A transcript may not claim state, whatever it passes in.
     expect(db.listSessions()[0]).toMatchObject({ state: "unknown", hasBlocking: false });
+    expect(db.listSessions()[0]?.hookTs).toBeNull();
 
-    db.insertEvent({
-      sessionId: "claude:s1",
-      harness: "claude",
-      type: "PermissionRequest",
-      ts: "2026-08-01T00:01:00Z",
-      payloadJson: "{}",
-      sourceEventId: "permission-1",
-    });
+    const hook = (type: string, state: "active" | "needs_attention" | "ended", blocking: boolean, ts: string) =>
+      db.applyHookState({
+        sessionId: "claude:s1",
+        harness: "claude",
+        nativeId: "s1",
+        cwd: "/tmp",
+        state,
+        hasBlocking: blocking,
+        ts,
+        eventType: type,
+      });
+
+    hook("PermissionRequest", "needs_attention", true, "2026-08-01T00:01:00Z");
     expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: true });
 
-    db.insertTurn({
-      id: "claude:a1",
-      sessionId: "claude:s1",
-      sourceEventId: "a1",
-      role: "assistant",
-      ts: "2026-08-01T00:02:00Z",
-      model: null,
-      text: "continuing",
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      stopReason: null,
-      permissionMode: null,
-      preventedContinuation: false,
-      isSidechain: false,
-      interrupted: false,
-      cursorRulesJson: null,
-      parentId: null,
-      isUserPrompt: false,
-    });
-    expect(db.listSessions()[0]).toMatchObject({ state: "unknown", hasBlocking: false });
+    hook("PostToolUse", "active", false, "2026-08-01T00:02:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "active", hasBlocking: false });
+
+    hook("Stop", "needs_attention", false, "2026-08-01T00:03:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: false });
+
+    // An out-of-order event must not rewind the state.
+    hook("PreToolUse", "active", false, "2026-08-01T00:00:30Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: false });
+
+    hook("SessionEnd", "ended", false, "2026-08-01T00:04:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "ended" });
     db.close();
   });
 });
@@ -207,7 +204,7 @@ describe("ingest + improve e2e", () => {
     expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
-    const improve = runImprove(store);
+    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true });
     expect(improve.candidates).toBeGreaterThanOrEqual(3);
     expect(improve.promoted).toBeGreaterThanOrEqual(1);
     expect(improve.suggestions).toBeGreaterThanOrEqual(1);
@@ -221,10 +218,15 @@ describe("apply + undo", () => {
     const home = path.join(dir, "home");
     fs.mkdirSync(path.join(home, ".claude"), { recursive: true });
     const previousHome = process.env.HOME;
+    const previous = process.env.SIDECAR_HOME;
     process.env.HOME = home;
+    process.env.SIDECAR_HOME = path.join(dir, "sidecar-home");
     try {
       const target = path.join(home, ".claude", "CLAUDE.md");
       fs.writeFileSync(target, "# rules\n");
+      // The global rules file is opt-in, so the default must refuse it.
+      expect(() => validateTarget(target)).toThrow(/turned off/);
+      writeSettings({ improveGlobalRules: true });
       expect(validateTarget(target)).toBe(fs.realpathSync.native(target));
 
       const store = Store.open(path.join(dir, "db.sqlite"));
@@ -251,9 +253,7 @@ describe("apply + undo", () => {
         backupPath: null,
         appliedHash: null,
       });
-      const previous = process.env.SIDECAR_HOME;
-      process.env.SIDECAR_HOME = path.join(dir, "sidecar-home");
-      try {
+      {
         const applied = applySuggestion(store, "sug-1");
         expect(applied.ok).toBe(true);
         expect(fs.readFileSync(target, "utf8")).toContain("do not inline styles");
@@ -261,15 +261,14 @@ describe("apply + undo", () => {
         const undone = undoSuggestion(store, "sug-1");
         expect(undone.ok).toBe(false);
         expect(undone.error).toMatch(/changed after apply/);
-      } finally {
-        if (previous === undefined) {
-          delete process.env.SIDECAR_HOME;
-        } else {
-          process.env.SIDECAR_HOME = previous;
-        }
       }
       store.close();
     } finally {
+      if (previous === undefined) {
+        delete process.env.SIDECAR_HOME;
+      } else {
+        process.env.SIDECAR_HOME = previous;
+      }
       if (previousHome === undefined) {
         delete process.env.HOME;
       } else {

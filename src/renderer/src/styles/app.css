@@ -621,3 +621,51 @@ pre {
   background: var(--text);
   color: var(--card);
 }
+
+.status-pill.silent {
+  background: var(--bg-soft);
+  color: var(--faint);
+}
+
+.hooks-banner {
+  border-color: var(--accent);
+}
+
+.hooks-banner .btn {
+  margin-top: 8px;
+}
+
+.hook-status .muted {
+  margin: 6px 0 0;
+  word-break: break-all;
+}
+
+.hook-note {
+  color: var(--accent);
+}
+
+.hook-actions {
+  margin: 10px 0 2px;
+}
+
+.card-actions {
+  margin-top: 8px;
+}
+
+.card-note {
+  margin: 6px 0 0;
+  color: var(--danger);
+}
+
+.setting-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setting-row input {
+  margin-top: 2px;
+}

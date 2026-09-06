@@ -53,6 +53,9 @@ export interface SessionRecord {
   state: SessionState;
   hasBlocking: boolean;
   isSidechain: boolean;
+  // Timestamp of the last hook event; null means this session has never reported.
+  hookTs?: string | null;
+  hookEvent?: string | null;
   activity?: string | null;
   lastRole?: TurnRole | null;
 }
@@ -147,6 +150,16 @@ export interface IntegrationHealth {
   lagMs: number | null;
   parseFailures: number;
   lastError: string | null;
+}
+
+export interface HookStatus {
+  harness: Harness;
+  configPath: string;
+  installed: boolean;
+  present: string[];
+  missing: string[];
+  foreignEntries: number;
+  note: string | null;
 }
 
 export interface IngestReport {
@@ -244,6 +257,11 @@ export interface HealthReport {
   integrations: IntegrationHealth[];
 }
 
+export interface Settings {
+  improveEnabled: boolean;
+  improveGlobalRules: boolean;
+}
+
 export interface SidecarApi {
   health: () => Promise<HealthReport>;
   ingest: () => Promise<IngestReport>;
@@ -257,10 +275,23 @@ export interface SidecarApi {
   applySuggestion: (id: string) => Promise<ApplyResult>;
   undoSuggestion: (id: string) => Promise<ApplyResult>;
   dismissSuggestion: (id: string) => Promise<void>;
+  settings: () => Promise<Settings>;
+  updateSettings: (patch: Partial<Settings>) => Promise<Settings>;
+  hooksStatus: () => Promise<HookStatus[]>;
+  installHooks: () => Promise<HookStatus[]>;
+  uninstallHooks: () => Promise<HookStatus[]>;
 }
 
 export interface SidecarShell {
   setPinned: (pinned: boolean) => Promise<void>;
   hidePanel: () => Promise<void>;
   quitApp: () => Promise<void>;
+  openInEditor: (session: SessionRecord) => Promise<OpenResult>;
+  openInTerminal: (session: SessionRecord) => Promise<OpenResult>;
+}
+
+export interface OpenResult {
+  ok: boolean;
+  opened: string | null;
+  error: string | null;
 }

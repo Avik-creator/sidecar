@@ -83,19 +83,6 @@ CREATE TABLE IF NOT EXISTS usage_event (
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_event(ts);
 CREATE INDEX IF NOT EXISTS idx_usage_harness_ts ON usage_event(harness, ts);
 
-CREATE TABLE IF NOT EXISTS event (
-  id INTEGER PRIMARY KEY,
-  session_id TEXT,
-  harness TEXT NOT NULL,
-  type TEXT NOT NULL,
-  ts TEXT NOT NULL,
-  payload_json TEXT NOT NULL DEFAULT '{}',
-  source_event_id TEXT NOT NULL,
-  UNIQUE (harness, source_event_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_event_session_type_ts ON event(session_id, type, ts);
-
 CREATE TABLE IF NOT EXISTS candidate (
   turn_id TEXT PRIMARY KEY,
   signals_json TEXT NOT NULL,

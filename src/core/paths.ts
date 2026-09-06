@@ -13,12 +13,21 @@ export function dbPath(): string {
   return path.join(sidecarHome(), "sidecar.sqlite");
 }
 
+export function settingsPath(): string {
+  return path.join(sidecarHome(), "settings.json");
+}
+
 export function backupDir(): string {
   return path.join(sidecarHome(), "backups");
 }
 
-export function hooksLogPath(): string {
-  return path.join(sidecarHome(), "hooks.jsonl");
+// One file per hook event, so concurrent agents never interleave writes.
+export function hooksSpoolDir(): string {
+  return path.join(sidecarHome(), "hooks");
+}
+
+export function hookHelperPath(): string {
+  return path.join(sidecarHome(), "bin", "sidecar-hook");
 }
 
 export function claudeRoot(): string {

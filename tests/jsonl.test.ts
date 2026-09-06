@@ -20,18 +20,24 @@ function tmp(): string {
   return dir;
 }
 
+function collect(filePath: string, offset: number): { lines: string[]; nextOffset: number; failures: number } {
+  const lines: string[] = [];
+  const result = readJsonlFromOffset(filePath, offset, (text) => lines.push(text));
+  return { lines, ...result };
+}
+
 describe("jsonl tailer", () => {
   it("keeps a partial last line until a newline arrives", () => {
     const dir = tmp();
     const filePath = path.join(dir, "a.jsonl");
     fs.writeFileSync(filePath, '{"id":1}\n{"id":2');
-    const first = readJsonlFromOffset(filePath, 0);
-    expect(first.lines.map((l) => l.text)).toEqual(['{"id":1}']);
+    const first = collect(filePath, 0);
+    expect(first.lines).toEqual(['{"id":1}']);
     expect(first.nextOffset).toBe(Buffer.byteLength('{"id":1}\n', "utf8"));
 
     fs.appendFileSync(filePath, '}\n{"id":3}\n');
-    const second = readJsonlFromOffset(filePath, first.nextOffset);
-    expect(second.lines.map((l) => l.text)).toEqual(['{"id":2}', '{"id":3}']);
+    const second = collect(filePath, first.nextOffset);
+    expect(second.lines).toEqual(['{"id":2}', '{"id":3}']);
   });
 
   it("restarts from zero after truncation or inode change", () => {
@@ -57,5 +63,18 @@ describe("jsonl tailer", () => {
 
     const rotated: SourceFileState = { ...previous, inode: "other:1", byteOffset: 99 };
     expect(resumeOffset(rotated, identity)).toBe(0);
+  });
+
+  it("reassembles lines and multi-byte characters split across read chunks", () => {
+    const dir = tmp();
+    const filePath = path.join(dir, "c.jsonl");
+    // Bigger than one 1 MiB read, so every boundary case has to survive chunking.
+    const rows = Array.from({ length: 20_000 }, (_, i) => JSON.stringify({ i, pad: "é".repeat(80) }));
+    fs.writeFileSync(filePath, `${rows.join("\n")}\n`);
+    expect(fs.statSync(filePath).size).toBeGreaterThan(1024 * 1024);
+    const result = collect(filePath, 0);
+    expect(result.lines).toEqual(rows);
+    expect(result.nextOffset).toBe(fs.statSync(filePath).size);
+    expect(result.failures).toBe(0);
   });
 });
