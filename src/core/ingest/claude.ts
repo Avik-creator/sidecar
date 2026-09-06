@@ -47,9 +47,9 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
   const cwd = asString(rec.cwd);
   const gitBranch = asString(rec.gitBranch);
   const isSidechain = asBool(rec.isSidechain);
-  const state = claudeSessionState(rec, type);
   const batch = emptyBatch();
 
+  // Transcripts supply content only; hook events are the sole source of session state.
   batch.sessions.push({
     id,
     harness: "claude",
@@ -59,9 +59,9 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     worktree: false,
     title: type === "ai-title" ? asString(rec.aiTitle) : null,
     startedAt: ts,
-    endedAt: state === "ended" ? ts : null,
+    endedAt: null,
     lastTs: ts,
-    state,
+    state: "unknown",
     hasBlocking: false,
     isSidechain,
   });
@@ -113,14 +113,6 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
         cacheWrite,
       });
     }
-  }
-
-  if (type === "permission-mode") {
-    batch.sessions[0] = {
-      ...batch.sessions[0]!,
-      hasBlocking: false,
-      state: "active",
-    };
   }
 
   if (type !== "user" && type !== "assistant") {
@@ -179,20 +171,6 @@ function sessionIdFromPath(filePath: string): string | null {
     return base.slice(0, -".jsonl".length);
   }
   return null;
-}
-
-function claudeSessionState(rec: Record<string, unknown>, type: string): SessionRecord["state"] {
-  if (type === "result" || type === "system" && asString(rec.subtype) === "session_end") {
-    return "ended";
-  }
-  if (type === "assistant") {
-    const stopReason = asString(rec.stopReason) ?? asString(asRecord(rec.message)?.stop_reason);
-    return stopReason ? "ended" : "active";
-  }
-  if (type === "user") {
-    return "active";
-  }
-  return "unknown";
 }
 
 function compactPayload(rec: Record<string, unknown>): string {

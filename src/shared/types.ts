@@ -53,6 +53,9 @@ export interface SessionRecord {
   state: SessionState;
   hasBlocking: boolean;
   isSidechain: boolean;
+  // Timestamp of the last hook event; null means this session has never reported.
+  hookTs?: string | null;
+  hookEvent?: string | null;
   activity?: string | null;
   lastRole?: TurnRole | null;
 }

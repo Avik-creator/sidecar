@@ -32,7 +32,11 @@ describe("claude parser", () => {
     }
     expect(assistant.usage[0]?.tokensIn).toBe(10);
     expect(assistant.turns[0]?.model).toBe("claude-sonnet-4");
-    expect(assistant.sessions[0]?.state).toBe("active");
+    // Transcripts carry content only; state comes from hooks.
+    expect(assistant.sessions[0]?.state).toBe("unknown");
+    expect(assistant.sessions[0]?.hasBlocking).toBe(false);
+    expect(assistant.sessions[0]?.cwd).toBe("/tmp/proj");
+    expect(assistant.sessions[0]?.gitBranch).toBe("main");
 
     const completed = parseClaudeLine(
       "/tmp/abc.jsonl",
@@ -47,7 +51,9 @@ describe("claude parser", () => {
     expect(completed).not.toBe("fail");
     expect(completed).not.toBe("skip");
     if (completed !== "fail" && completed !== "skip") {
-      expect(completed.sessions[0]?.state).toBe("ended");
+      // stop_reason no longer decides anything: end_turn is a hook's job to report.
+      expect(completed.sessions[0]?.state).toBe("unknown");
+      expect(completed.sessions[0]?.endedAt).toBeNull();
     }
 
     expect(
@@ -76,7 +82,7 @@ describe("claude parser", () => {
     if (permissionMode === "fail" || permissionMode === "skip") {
       throw new Error("expected permission mode to parse");
     }
-    expect(permissionMode.sessions[0]?.state).toBe("active");
+    expect(permissionMode.sessions[0]?.state).toBe("unknown");
     expect(permissionMode.sessions[0]?.hasBlocking).toBe(false);
   });
 });
@@ -115,7 +121,7 @@ describe("codex parser", () => {
     expect(parsed.sessions[0]?.state).toBe("unknown");
   });
 
-  it("only changes live state on lifecycle events", () => {
+  it("never infers live state from lifecycle events", () => {
     const started = parseCodexLine(
       "/tmp/rollout-019eff07-2885-7572-80c3-e199ebc7013d.jsonl",
       JSON.stringify({
@@ -135,7 +141,8 @@ describe("codex parser", () => {
     if (started === "fail" || started === "skip" || completed === "fail" || completed === "skip") {
       throw new Error("expected lifecycle events to parse");
     }
-    expect(started.sessions[0]?.state).toBe("active");
-    expect(completed.sessions[0]?.state).toBe("ended");
+    expect(started.sessions[0]?.state).toBe("unknown");
+    expect(completed.sessions[0]?.state).toBe("unknown");
+    expect(completed.sessions[0]?.endedAt).toBeNull();
   });
 });

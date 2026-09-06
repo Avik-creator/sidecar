@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { SCHEMA_SQL } from "./schema.js";
+import { migrate } from "./migrate.js";
 import type {
   CandidateRecord,
   ClusterRecord,
@@ -24,7 +24,7 @@ function openDatabase(filePath: string): DatabaseSync {
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(SCHEMA_SQL);
+  migrate(db);
   return db;
 }
 
@@ -96,8 +96,9 @@ export class Store {
   upsertSession(session: SessionRecord): void {
     this.db
       .prepare(
+        // state and has_blocking are literals here: only hook events may set them.
         `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
            git_branch = COALESCE(excluded.git_branch, session.git_branch),
@@ -106,15 +107,8 @@ export class Store {
            started_at = COALESCE(session.started_at, excluded.started_at),
            ended_at = COALESCE(excluded.ended_at, session.ended_at),
            last_ts = CASE
-             WHEN excluded.state = 'unknown' THEN session.last_ts
              WHEN excluded.last_ts IS NOT NULL AND (session.last_ts IS NULL OR excluded.last_ts > session.last_ts)
              THEN excluded.last_ts ELSE session.last_ts END,
-           state = CASE
-             WHEN excluded.state = 'unknown' THEN session.state
-             ELSE excluded.state END,
-           has_blocking = CASE
-             WHEN excluded.state = 'unknown' THEN session.has_blocking
-             ELSE excluded.has_blocking END,
            is_sidechain = excluded.is_sidechain`,
       )
       .run(
@@ -128,9 +122,45 @@ export class Store {
         session.startedAt,
         session.endedAt,
         session.lastTs,
-        session.state,
-        session.hasBlocking ? 1 : 0,
         session.isSidechain ? 1 : 0,
+      );
+  }
+
+  // Hook events are the only writer of session state.
+  applyHookState(row: HookStateWrite): void {
+    this.db
+      .prepare(
+        `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           cwd = COALESCE(excluded.cwd, session.cwd),
+           state = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.state ELSE session.state END,
+           has_blocking = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.has_blocking ELSE session.has_blocking END,
+           hook_event = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.hook_event ELSE session.hook_event END,
+           hook_ts = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.hook_ts ELSE session.hook_ts END,
+           last_ts = CASE
+             WHEN session.last_ts IS NULL OR excluded.last_ts > session.last_ts
+             THEN excluded.last_ts ELSE session.last_ts END`,
+      )
+      .run(
+        row.sessionId,
+        row.harness,
+        row.nativeId,
+        row.cwd,
+        row.state,
+        row.hasBlocking ? 1 : 0,
+        row.ts,
+        row.eventType,
+        row.ts,
+        row.ts,
       );
   }
 
@@ -329,16 +359,7 @@ export class Store {
                     SELECT t.role FROM turn t
                     WHERE t.session_id = s.id AND t.role IN ('user', 'assistant')
                     ORDER BY t.ts DESC LIMIT 1
-                  ) AS last_role,
-                  s.harness = 'claude' AND s.has_blocking = 1 AND EXISTS (
-                    SELECT 1 FROM event e
-                    WHERE e.session_id = s.id
-                      AND e.type = 'PermissionRequest'
-                      AND e.ts > COALESCE((
-                        SELECT MAX(t.ts) FROM turn t
-                        WHERE t.session_id = s.id
-                      ), '')
-                  ) AS pending_permission
+                  ) AS last_role
            FROM session s
            ORDER BY COALESCE(s.last_ts, s.started_at) DESC
            LIMIT ?`,
@@ -496,9 +517,21 @@ interface SessionRow {
   state: string;
   has_blocking: number;
   is_sidechain: number;
+  hook_ts?: string | null;
+  hook_event?: string | null;
   last_text?: string | null;
   last_role?: string | null;
-  pending_permission?: number;
+}
+
+export interface HookStateWrite {
+  sessionId: string;
+  harness: Harness;
+  nativeId: string;
+  cwd: string | null;
+  state: SessionRecord["state"];
+  hasBlocking: boolean;
+  ts: string;
+  eventType: string;
 }
 
 interface TurnRow {
@@ -600,12 +633,6 @@ function mapSourceFile(row: SourceFileRow): SourceFileState {
 }
 
 function mapSession(row: SessionRow): SessionRecord {
-  const hasBlocking =
-    row.harness === "claude" ? row.pending_permission === 1 : row.has_blocking === 1;
-  const state =
-    row.harness === "claude" && row.state === "needs_attention" && !hasBlocking
-      ? "unknown"
-      : row.state as SessionRecord["state"];
   return {
     id: row.id,
     harness: row.harness as Harness,
@@ -617,8 +644,10 @@ function mapSession(row: SessionRow): SessionRecord {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     lastTs: row.last_ts,
-    state,
-    hasBlocking,
+    state: row.state as SessionRecord["state"],
+    hasBlocking: row.has_blocking === 1,
+    hookTs: row.hook_ts ?? null,
+    hookEvent: row.hook_event ?? null,
     isSidechain: row.is_sidechain === 1,
     activity: firstActivity(row.title, row.last_text, row.cwd),
     lastRole: row.last_role === "user" || row.last_role === "assistant" ? row.last_role : null,

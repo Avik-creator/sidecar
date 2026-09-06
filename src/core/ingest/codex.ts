@@ -2,7 +2,7 @@ import type { ParsedBatch } from "./claude.js";
 import { emptyBatch } from "./claude.js";
 import { shortHash } from "../hash.js";
 import { asNumber, asRecord, asString, extractText, truncateText } from "../text.js";
-import type { SessionRecord, TurnRecord } from "../../shared/types.js";
+import type { TurnRecord } from "../../shared/types.js";
 
 export function parseCodexLine(filePath: string, line: string, sessionHint?: string): ParsedBatch | "skip" | "fail" {
   let rec: Record<string, unknown>;
@@ -53,7 +53,6 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
   const nativeId = sessionHint ?? idFromFilename(filePath);
   const sessionId = `codex:${nativeId}`;
   const eventType = type === "event_msg" ? asString(payload.type) : null;
-  const state = codexSessionState(eventType);
   batch.sessions.push({
     id: sessionId,
     harness: "codex",
@@ -63,9 +62,9 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
     worktree: false,
     title: null,
     startedAt: ts,
-    endedAt: state === "ended" ? ts : null,
+    endedAt: null,
     lastTs: ts,
-    state,
+    state: "unknown",
     hasBlocking: false,
     isSidechain: false,
   });
@@ -198,16 +197,6 @@ function mapCodexRole(role: string | null): TurnRecord["role"] | null {
     default:
       return null;
   }
-}
-
-function codexSessionState(eventType: string | null): SessionRecord["state"] {
-  if (eventType === "task_started" || eventType === "turn_started") {
-    return "active";
-  }
-  if (eventType === "task_complete" || eventType === "turn_complete" || eventType === "turn_aborted") {
-    return "ended";
-  }
-  return "unknown";
 }
 
 function compactEvent(payload: Record<string, unknown>): string {

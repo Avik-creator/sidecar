@@ -96,7 +96,7 @@ describe("store uniqueness", () => {
     db.close();
   });
 
-  it("only reports a Claude permission request while it is actually pending", () => {
+  it("keeps a transcript-only session stateless and lets hooks drive it", () => {
     const dir = tmp();
     const db = Store.open(path.join(dir, "db.sqlite"));
     db.upsertSession({
@@ -114,41 +114,37 @@ describe("store uniqueness", () => {
       hasBlocking: true,
       isSidechain: false,
     });
-
+    // A transcript may not claim state, whatever it passes in.
     expect(db.listSessions()[0]).toMatchObject({ state: "unknown", hasBlocking: false });
+    expect(db.listSessions()[0]?.hookTs).toBeNull();
 
-    db.insertEvent({
-      sessionId: "claude:s1",
-      harness: "claude",
-      type: "PermissionRequest",
-      ts: "2026-08-01T00:01:00Z",
-      payloadJson: "{}",
-      sourceEventId: "permission-1",
-    });
+    const hook = (type: string, state: "active" | "needs_attention" | "ended", blocking: boolean, ts: string) =>
+      db.applyHookState({
+        sessionId: "claude:s1",
+        harness: "claude",
+        nativeId: "s1",
+        cwd: "/tmp",
+        state,
+        hasBlocking: blocking,
+        ts,
+        eventType: type,
+      });
+
+    hook("PermissionRequest", "needs_attention", true, "2026-08-01T00:01:00Z");
     expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: true });
 
-    db.insertTurn({
-      id: "claude:a1",
-      sessionId: "claude:s1",
-      sourceEventId: "a1",
-      role: "assistant",
-      ts: "2026-08-01T00:02:00Z",
-      model: null,
-      text: "continuing",
-      tokensIn: 0,
-      tokensOut: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      stopReason: null,
-      permissionMode: null,
-      preventedContinuation: false,
-      isSidechain: false,
-      interrupted: false,
-      cursorRulesJson: null,
-      parentId: null,
-      isUserPrompt: false,
-    });
-    expect(db.listSessions()[0]).toMatchObject({ state: "unknown", hasBlocking: false });
+    hook("PostToolUse", "active", false, "2026-08-01T00:02:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "active", hasBlocking: false });
+
+    hook("Stop", "needs_attention", false, "2026-08-01T00:03:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: false });
+
+    // An out-of-order event must not rewind the state.
+    hook("PreToolUse", "active", false, "2026-08-01T00:00:30Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "needs_attention", hasBlocking: false });
+
+    hook("SessionEnd", "ended", false, "2026-08-01T00:04:00Z");
+    expect(db.listSessions()[0]).toMatchObject({ state: "ended" });
     db.close();
   });
 });

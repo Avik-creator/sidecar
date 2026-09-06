@@ -10,15 +10,17 @@ import {
   claudeProjectsDir,
   codexSessionsDir,
   cursorStateDb,
-  hooksLogPath,
+  hooksSpoolDir,
 } from "../paths.js";
+import { cwdFromPayload, hookOutcome, sessionIdFromPayload } from "../hooks/events.js";
+import { clearSpool, readSpool } from "../hooks/spool.js";
 import type { Harness, IngestReport } from "../../shared/types.js";
 
 export interface IngestOptions {
   claudeDir?: string;
   codexDir?: string;
   cursorDb?: string;
-  hooksFile?: string;
+  spoolDir?: string;
 }
 
 export function ingestAll(store: Store, options: IngestOptions = {}): IngestReport {
@@ -32,7 +34,7 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
   const claudeDir = options.claudeDir ?? claudeProjectsDir();
   const codexDir = options.codexDir ?? codexSessionsDir();
   const cursorDb = options.cursorDb ?? cursorStateDb();
-  const hooksFile = options.hooksFile ?? hooksLogPath();
+  const spoolDir = options.spoolDir ?? hooksSpoolDir();
 
   const claudeFiles = listJsonl(claudeDir);
   filesSeen += claudeFiles.length;
@@ -134,12 +136,32 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
     });
   }
 
-  if (fs.existsSync(hooksFile)) {
-    filesSeen += 1;
-    const result = ingestJsonlFile(store, hooksFile, "claude", (line) => parseHookLine(line));
-    recordsRead += result.recordsRead;
-    parseFailures += result.parseFailures;
+  const spool = readSpool(spoolDir);
+  filesSeen += spool.files.length;
+  recordsRead += spool.events.length;
+  parseFailures += spool.failures;
+  if (spool.events.length > 0) {
+    store.transaction(() => {
+      for (const event of spool.events) {
+        const outcome = hookOutcome(event.harness, event.type);
+        const nativeId = sessionIdFromPayload(event.harness, event.payload);
+        if (!outcome || !nativeId) {
+          continue;
+        }
+        store.applyHookState({
+          sessionId: `${event.harness}:${nativeId}`,
+          harness: event.harness,
+          nativeId,
+          cwd: cwdFromPayload(event.harness, event.payload),
+          state: outcome.state,
+          hasBlocking: outcome.hasBlocking,
+          ts: event.ts,
+          eventType: event.type,
+        });
+      }
+    });
   }
+  clearSpool(spool.files);
 
   return {
     filesSeen,
@@ -242,45 +264,6 @@ function listJsonl(root: string): string[] {
   };
   walk(root);
   return out.sort();
-}
-
-function parseHookLine(line: string): ParsedBatch | "skip" | "fail" {
-  try {
-    const rec = JSON.parse(line) as Record<string, unknown>;
-    const harness = (rec.harness as Harness | undefined) ?? "claude";
-    const sessionId = typeof rec.sessionId === "string" ? `${harness}:${rec.sessionId}` : null;
-    const ts = typeof rec.ts === "string" ? rec.ts : new Date().toISOString();
-    const type = typeof rec.type === "string" ? rec.type : "hook";
-    const batch = emptyBatch();
-    batch.events.push({
-      sessionId,
-      harness,
-      type,
-      ts,
-      payloadJson: JSON.stringify(rec.payload ?? rec),
-      sourceEventId: typeof rec.id === "string" ? rec.id : `${type}:${ts}`,
-    });
-    if (sessionId && type === "PermissionRequest") {
-      batch.sessions.push({
-        id: sessionId,
-        harness,
-        nativeId: rec.sessionId as string,
-        cwd: null,
-        gitBranch: null,
-        worktree: false,
-        title: null,
-        startedAt: ts,
-        endedAt: null,
-        lastTs: ts,
-        state: "needs_attention",
-        hasBlocking: true,
-        isSidechain: false,
-      });
-    }
-    return batch;
-  } catch {
-    return "fail";
-  }
 }
 
 function isPermissionError(error: unknown): boolean {

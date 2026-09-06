@@ -17,10 +17,6 @@ export function backupDir(): string {
   return path.join(sidecarHome(), "backups");
 }
 
-export function hooksLogPath(): string {
-  return path.join(sidecarHome(), "hooks.jsonl");
-}
-
 // One file per hook event, so concurrent agents never interleave writes.
 export function hooksSpoolDir(): string {
   return path.join(sidecarHome(), "hooks");

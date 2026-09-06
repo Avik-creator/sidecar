@@ -62,10 +62,6 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
       const uri = asRecord(workspace?.uri);
       const cwd = asString(uri?.fsPath) ?? asString(uri?.path) ?? null;
       const repos = Array.isArray(value.trackedGitRepos) ? value.trackedGitRepos : [];
-      const hasBlocking = asBool(value.hasBlockingPendingActions);
-      const agentLocation = asRecord(value.agentLocation);
-      const agentStatus = asString(agentLocation?.status);
-      const isRunning = value.unfinishedRunAt != null || agentStatus === "active" || agentStatus === "running";
       const session: SessionRecord = {
         id: `cursor:${header.composerId}`,
         harness: "cursor",
@@ -76,13 +72,9 @@ export function ingestCursor(dbPath: string, watermark: string | null): CursorIn
         title: asString(value.name) ?? asString(value.subtitle),
         startedAt: isoFromMs(header.createdAt),
         endedAt: header.isArchived ? isoFromMs(header.lastUpdatedAt ?? header.recency) : null,
-        lastTs: isoFromMs(header.createdAt) ?? isoFromMs(header.lastUpdatedAt ?? header.recency),
-        state: hasBlocking
-          ? "needs_attention"
-          : !header.isArchived && isRunning
-            ? "active"
-            : "ended",
-        hasBlocking,
+        lastTs: isoFromMs(header.lastUpdatedAt ?? header.recency) ?? isoFromMs(header.createdAt),
+        state: "unknown",
+        hasBlocking: false,
         isSidechain: header.isSubagent === 1,
       };
       sessions.set(header.composerId, session);
