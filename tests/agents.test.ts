@@ -178,3 +178,32 @@ describe("agent ranking", () => {
     expect(liveSessions(store).map((row) => row.id)).toEqual(["subagent"]);
   });
 });
+
+describe("session state from native readers", () => {
+  it("ends a session whose process is gone, however fresh its report", () => {
+    const next = normalizeSession(
+      session({ id: "dead", state: "active", pid: 999, stateSource: "claude-registry", hookTs: ago(0) }),
+      NOW,
+      () => false,
+    );
+    expect(next.state).toBe("ended");
+  });
+
+  it("keeps a live process working past the hook silence limit", () => {
+    const next = normalizeSession(
+      session({ id: "long-turn", state: "active", pid: 999, stateSource: "claude-registry", hookTs: ago(45) }),
+      NOW,
+      () => true,
+    );
+    expect(next.state).toBe("active");
+  });
+
+  it("gives a pid-less native reading longer than a hook before writing it off", () => {
+    const codex = (minutes: number) =>
+      normalizeSession(session({ id: "codex", state: "active", stateSource: "codex-db", hookTs: ago(minutes) }), NOW);
+    expect(codex(20).state).toBe("active");
+    expect(codex(40).state).toBe("ended");
+    // A hook-sourced session still dies after five silent minutes.
+    expect(normalizeSession(session({ id: "hook", state: "active", stateSource: "hook", hookTs: ago(20) }), NOW).state).toBe("ended");
+  });
+});
