@@ -13,10 +13,31 @@ const WAITING_TTL_MS = 4 * 60 * 60 * 1000;
 
 export function liveSessions(store: Store, alive: AliveCheck = isProcessAlive): SessionRecord[] {
   const now = Date.now();
-  return store
-    .listSessions()
-    .map((session) => normalizeSession(session, now, alive))
-    .sort(compareSessions);
+  const sessions = store.listSessions().map((session) => normalizeSession(session, now, alive));
+  return withUsage(sessions, store.sessionUsage()).sort(compareSessions);
+}
+
+// A parent's spend includes its subagents, since that is what the task actually cost.
+export function withUsage(
+  sessions: SessionRecord[],
+  usage: Map<string, { tokens: number; usd: number }>,
+): SessionRecord[] {
+  const totals = new Map<string, { tokens: number; usd: number }>();
+  const add = (id: string, delta: { tokens: number; usd: number }): void => {
+    const current = totals.get(id) ?? { tokens: 0, usd: 0 };
+    totals.set(id, { tokens: current.tokens + delta.tokens, usd: current.usd + delta.usd });
+  };
+  for (const session of sessions) {
+    const own = usage.get(session.id);
+    if (!own) {
+      continue;
+    }
+    add(session.id, own);
+    if (session.parentId) {
+      add(session.parentId, own);
+    }
+  }
+  return sessions.map((session) => ({ ...session, ...(totals.get(session.id) ?? { tokens: 0, usd: 0 }) }));
 }
 
 export function normalizeSession(

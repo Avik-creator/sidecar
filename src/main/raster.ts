@@ -3,8 +3,18 @@ import { MARK_ACCENT, MARK_PAPER, markLayout } from "../shared/mark.js";
 
 const CRC_TABLE = makeCrcTable();
 
-export function trayMarkPng(pixelSize = 32): Buffer {
-  return renderOutlineMark(pixelSize, [0, 0, 0, 255]);
+// Outline while idle, solid petals while any agent is working.
+export function trayMarkPng(pixelSize = 32, filled = false): Buffer {
+  if (!filled) {
+    return renderOutlineMark(pixelSize, [0, 0, 0, 255]);
+  }
+  const rgba = Buffer.alloc(pixelSize * pixelSize * 4);
+  const layout = markLayout(pixelSize);
+  for (const petal of layout.petals) {
+    stampCircle(rgba, pixelSize, petal.x, petal.y, petal.r + layout.stroke / 2, [0, 0, 0, 255]);
+  }
+  stampCircle(rgba, pixelSize, layout.cx, layout.cy, layout.centerR, [0, 0, 0, 255]);
+  return encodePng(pixelSize, pixelSize, rgba);
 }
 
 export function appIconPng(size = 512): Buffer {

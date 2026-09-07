@@ -34,6 +34,7 @@ let lastSourceSignature = "";
 let lastTrayRefreshAt = 0;
 let lastIngestAt = 0;
 let attentionSeen: Set<string> | null = null;
+let trayFilled = false;
 
 function resolvePreload(): string {
   const candidates = [
@@ -282,12 +283,30 @@ function sourceSignature(): string {
 async function updateTrayBadge(): Promise<void> {
   const sessions = await getService().sessions();
   const attention = sessions.filter(needsYou);
+  const working = sessions.filter((session) => session.state === "active" && !session.parentId);
   notifyAttention(sessions);
   if (!tray) {
     return;
   }
-  tray.setToolTip(attention.length > 0 ? `Sidecar — ${attention.length} need you` : "Sidecar");
+  // The count is for you; the solid mark just says something is running.
+  tray.setToolTip(trayTooltip(attention.length, working.length));
   tray.setTitle(attention.length > 0 ? String(attention.length) : "");
+  const filled = working.length > 0;
+  if (filled !== trayFilled) {
+    trayFilled = filled;
+    tray.setImage(createTrayImage(filled));
+  }
+}
+
+function trayTooltip(attention: number, working: number): string {
+  const parts: string[] = [];
+  if (attention > 0) {
+    parts.push(`${attention} need you`);
+  }
+  if (working > 0) {
+    parts.push(`${working} working`);
+  }
+  return parts.length > 0 ? `Sidecar — ${parts.join(" · ")}` : "Sidecar";
 }
 
 function notifyAttention(sessions: SessionRecord[]): void {
