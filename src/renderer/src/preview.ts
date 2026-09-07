@@ -2,12 +2,24 @@ import type {
   HealthReport,
   HookStatus,
   SessionRecord,
+  Settings,
   SetupItemRecord,
   SidecarApi,
   SidecarShell,
   SuggestionRecord,
   UsageReport,
 } from "@shared/types";
+
+const PREVIEW_SETTINGS: Settings = {
+  improveEnabled: true,
+  improveGlobalRules: false,
+  hooksAutoInstall: true,
+  launchAtLogin: false,
+  hotkey: "Alt+Shift+S",
+  quietFrom: null,
+  quietTo: null,
+  quotaAlertPct: 90,
+};
 
 export function installPreviewBridge(): void {
   window.sidecar = previewApi();
@@ -60,8 +72,8 @@ function previewApi(): SidecarApi {
     applySuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     undoSuggestion: async (id) => ({ ok: true, suggestionId: id, targetFile: "" }),
     dismissSuggestion: async () => undefined,
-    settings: async () => ({ improveEnabled: true, improveGlobalRules: false, hooksAutoInstall: true }),
-    updateSettings: async (patch) => ({ improveEnabled: true, improveGlobalRules: false, hooksAutoInstall: true, ...patch }),
+    settings: async () => ({ ...PREVIEW_SETTINGS }),
+    updateSettings: async (patch) => ({ ...PREVIEW_SETTINGS, ...patch }),
     hooksStatus: async () => previewHooks(),
     installHooks: async () => previewHooks(),
     uninstallHooks: async () => previewHooks().map((status) => ({ ...status, installed: false })),
