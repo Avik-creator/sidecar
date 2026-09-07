@@ -110,3 +110,12 @@ export function BellIcon() {
     </svg>
   );
 }
+
+export function SearchIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m10.3 10.3 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
