@@ -7,6 +7,7 @@ import type {
   ClusterRecord,
   Harness,
   IntegrationHealth,
+  SessionFacts,
   SessionRecord,
   StateSource,
   SuggestionRecord,
@@ -14,6 +15,7 @@ import type {
   TurnRecord,
   UsageEventRecord,
 } from "../../shared/types.js";
+import { usdEstimate } from "../usage/report.js";
 
 function asRows<T>(value: unknown): T {
   return value as T;
@@ -111,8 +113,8 @@ export class Store {
     this
       .statement(
         // state and has_blocking are literals here: only hook events may set them.
-        `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain, parent_id, agent_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?, ?)
+        `INSERT INTO session(id, harness, native_id, cwd, git_branch, worktree, title, started_at, ended_at, last_ts, state, has_blocking, is_sidechain, parent_id, agent_type, last_tool)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', 0, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
            git_branch = COALESCE(excluded.git_branch, session.git_branch),
@@ -125,7 +127,8 @@ export class Store {
              THEN excluded.last_ts ELSE session.last_ts END,
            is_sidechain = excluded.is_sidechain,
            parent_id = COALESCE(excluded.parent_id, session.parent_id),
-           agent_type = COALESCE(excluded.agent_type, session.agent_type)`,
+           agent_type = COALESCE(excluded.agent_type, session.agent_type),
+           last_tool = CASE WHEN ? THEN excluded.last_tool ELSE session.last_tool END`,
       )
       .run(
         session.id,
@@ -141,6 +144,9 @@ export class Store {
         session.isSidechain ? 1 : 0,
         session.parentId,
         session.agentType,
+        session.lastTool ?? null,
+        // A parser that saw no tool call keeps whatever was there; null clears it on purpose.
+        session.lastTool === undefined ? 0 : 1,
       );
   }
 
@@ -150,10 +156,11 @@ export class Store {
 
   // Hook events and native readers are the only writers of session state; the newest report wins.
   applyState(row: StateWrite): void {
+    const facts = row.facts ?? {};
     this
       .statement(
-        `INSERT INTO session(id, harness, native_id, cwd, title, state, has_blocking, hook_ts, hook_event, state_source, pid, last_hook_ts, last_ts, started_at, parent_id, agent_type, is_sidechain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO session(id, harness, native_id, cwd, title, state, has_blocking, hook_ts, hook_event, state_source, pid, last_hook_ts, last_ts, started_at, parent_id, agent_type, is_sidechain, last_tool, tasks_done, tasks_total, queued, lines_added, lines_removed)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
            title = COALESCE(excluded.title, session.title),
@@ -162,6 +169,12 @@ export class Store {
            is_sidechain = MAX(excluded.is_sidechain, session.is_sidechain),
            pid = COALESCE(excluded.pid, session.pid),
            last_hook_ts = MAX(COALESCE(excluded.last_hook_ts, ''), COALESCE(session.last_hook_ts, '')),
+           tasks_done = COALESCE(excluded.tasks_done, session.tasks_done),
+           tasks_total = COALESCE(excluded.tasks_total, session.tasks_total),
+           queued = COALESCE(excluded.queued, session.queued),
+           lines_added = COALESCE(excluded.lines_added, session.lines_added),
+           lines_removed = COALESCE(excluded.lines_removed, session.lines_removed),
+           last_tool = CASE WHEN ? THEN excluded.last_tool ELSE session.last_tool END,
            state = CASE
              WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
              THEN excluded.state ELSE session.state END,
@@ -199,7 +212,35 @@ export class Store {
         row.parentId ?? null,
         row.agentType ?? null,
         row.parentId ? 1 : 0,
+        row.lastTool ?? null,
+        facts.tasksDone ?? null,
+        facts.tasksTotal ?? null,
+        facts.queued ?? null,
+        facts.linesAdded ?? null,
+        facts.linesRemoved ?? null,
+        row.lastTool === undefined ? 0 : 1,
       );
+  }
+
+  // Token totals and estimated spend per session, for the card and the subagent roll-up.
+  sessionUsage(): Map<string, { tokens: number; usd: number }> {
+    const rows = asRows<Array<{ session_id: string; model: string | null; tokens_in: number; tokens_out: number; cache_read: number; cache_write: number }>>(
+      this.db
+        .prepare(
+          `SELECT session_id, model, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out,
+                  SUM(cache_read) AS cache_read, SUM(cache_write) AS cache_write
+           FROM usage_event GROUP BY session_id, model`,
+        )
+        .all(),
+    );
+    const out = new Map<string, { tokens: number; usd: number }>();
+    for (const row of rows) {
+      const current = out.get(row.session_id) ?? { tokens: 0, usd: 0 };
+      current.tokens += row.tokens_in + row.tokens_out;
+      current.usd += usdEstimate(row.tokens_in, row.tokens_out, row.cache_read, row.cache_write, row.model);
+      out.set(row.session_id, current);
+    }
+    return out;
   }
 
   // Newest hook event per harness, regardless of what has overwritten the session's state since.
@@ -388,7 +429,17 @@ export class Store {
                     SELECT t.role FROM turn t
                     WHERE t.session_id = s.id AND t.role IN ('user', 'assistant')
                     ORDER BY t.ts DESC LIMIT 1
-                  ) AS last_role
+                  ) AS last_role,
+                  (
+                    SELECT t.ts FROM turn t
+                    WHERE t.session_id = s.id AND t.is_user_prompt = 1
+                    ORDER BY t.ts DESC LIMIT 1
+                  ) AS last_prompt_ts,
+                  (
+                    SELECT t.model FROM turn t
+                    WHERE t.session_id = s.id AND t.model IS NOT NULL
+                    ORDER BY t.ts DESC LIMIT 1
+                  ) AS model
            FROM session s
            ORDER BY COALESCE(s.last_ts, s.started_at) DESC
            LIMIT ?`,
@@ -555,8 +606,16 @@ interface SessionRow {
   hook_event?: string | null;
   state_source?: string | null;
   pid?: number | null;
+  last_tool?: string | null;
+  tasks_done?: number | null;
+  tasks_total?: number | null;
+  queued?: number | null;
+  lines_added?: number | null;
+  lines_removed?: number | null;
   last_text?: string | null;
   last_role?: string | null;
+  last_prompt_ts?: string | null;
+  model?: string | null;
 }
 
 export interface HookStateWrite {
@@ -578,6 +637,8 @@ export interface StateWrite extends HookStateWrite {
   source: StateSource;
   pid: number | null;
   title: string | null;
+  lastTool?: string | null;
+  facts?: SessionFacts;
 }
 
 interface TurnRow {
@@ -701,6 +762,14 @@ function mapSession(row: SessionRow): SessionRecord {
     agentType: row.agent_type ?? null,
     activity: firstActivity(row.title, row.last_text, row.cwd),
     lastRole: row.last_role === "user" || row.last_role === "assistant" ? row.last_role : null,
+    lastTool: row.last_tool ?? null,
+    lastPromptTs: row.last_prompt_ts ?? null,
+    model: row.model ?? null,
+    tasksDone: row.tasks_done ?? null,
+    tasksTotal: row.tasks_total ?? null,
+    queued: row.queued ?? null,
+    linesAdded: row.lines_added ?? null,
+    linesRemoved: row.lines_removed ?? null,
   };
 }
 

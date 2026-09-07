@@ -49,6 +49,17 @@ const MIGRATIONS: Migration[] = [
       `UPDATE session SET state_source = 'hook', last_hook_ts = hook_ts WHERE hook_ts IS NOT NULL`,
     ],
   },
+  {
+    version: 6,
+    statements: [
+      `ALTER TABLE session ADD COLUMN last_tool TEXT`,
+      `ALTER TABLE session ADD COLUMN tasks_done INTEGER`,
+      `ALTER TABLE session ADD COLUMN tasks_total INTEGER`,
+      `ALTER TABLE session ADD COLUMN queued INTEGER`,
+      `ALTER TABLE session ADD COLUMN lines_added INTEGER`,
+      `ALTER TABLE session ADD COLUMN lines_removed INTEGER`,
+    ],
+  },
 ];
 
 export function migrate(db: DatabaseSync): void {

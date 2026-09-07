@@ -35,7 +35,7 @@ describe("schema migrations", () => {
         version: number;
       }>
     ).map((row) => row.version);
-    expect(versions).toEqual([1, 2, 3, 4, 5]);
+    expect(versions).toEqual([1, 2, 3, 4, 5, 6]);
     expect(columns(store.db, "session")).toContain("hook_ts");
     expect(columns(store.db, "session")).toContain("hook_event");
     expect(columns(store.db, "session")).toContain("parent_id");
@@ -43,6 +43,8 @@ describe("schema migrations", () => {
     expect(columns(store.db, "session")).toContain("state_source");
     expect(columns(store.db, "session")).toContain("pid");
     expect(columns(store.db, "session")).toContain("last_hook_ts");
+    expect(columns(store.db, "session")).toContain("last_tool");
+    expect(columns(store.db, "session")).toContain("lines_removed");
     store.close();
   });
 
@@ -133,7 +135,7 @@ describe("schema migrations", () => {
     }
     const db = new DatabaseSync(file);
     const count = db.prepare(`SELECT COUNT(*) AS n FROM schema_migrations`).get() as { n: number };
-    expect(count.n).toBe(5);
+    expect(count.n).toBe(6);
     db.close();
   });
 
