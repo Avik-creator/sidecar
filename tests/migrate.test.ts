@@ -35,11 +35,39 @@ describe("schema migrations", () => {
         version: number;
       }>
     ).map((row) => row.version);
-    expect(versions).toEqual([1, 2, 3, 4]);
+    expect(versions).toEqual([1, 2, 3, 4, 5]);
     expect(columns(store.db, "session")).toContain("hook_ts");
     expect(columns(store.db, "session")).toContain("hook_event");
     expect(columns(store.db, "session")).toContain("parent_id");
     expect(columns(store.db, "session")).toContain("agent_type");
+    expect(columns(store.db, "session")).toContain("state_source");
+    expect(columns(store.db, "session")).toContain("pid");
+    expect(columns(store.db, "session")).toContain("last_hook_ts");
+    store.close();
+  });
+
+  it("backfills hook provenance onto sessions that already reported", () => {
+    const file = path.join(tmp(), "provenance.sqlite");
+    const first = Store.open(file);
+    first.db.exec(`DELETE FROM schema_migrations WHERE version = 5`);
+    first.db.exec(`ALTER TABLE session DROP COLUMN state_source`);
+    first.db.exec(`ALTER TABLE session DROP COLUMN pid`);
+    first.db.exec(`ALTER TABLE session DROP COLUMN last_hook_ts`);
+    first.db.exec(
+      `INSERT INTO session(id, harness, native_id, state, hook_ts) VALUES
+         ('claude:a', 'claude', 'a', 'active', '2026-09-01T00:00:00Z'),
+         ('claude:b', 'claude', 'b', 'unknown', NULL)`,
+    );
+    first.close();
+
+    const store = Store.open(file);
+    const rows = store.db
+      .prepare(`SELECT id, state_source, last_hook_ts FROM session ORDER BY id`)
+      .all() as Array<{ id: string; state_source: string | null; last_hook_ts: string | null }>;
+    expect(rows).toEqual([
+      { id: "claude:a", state_source: "hook", last_hook_ts: "2026-09-01T00:00:00Z" },
+      { id: "claude:b", state_source: null, last_hook_ts: null },
+    ]);
     store.close();
   });
 
@@ -105,7 +133,7 @@ describe("schema migrations", () => {
     }
     const db = new DatabaseSync(file);
     const count = db.prepare(`SELECT COUNT(*) AS n FROM schema_migrations`).get() as { n: number };
-    expect(count.n).toBe(4);
+    expect(count.n).toBe(5);
     db.close();
   });
 

@@ -39,6 +39,16 @@ const MIGRATIONS: Migration[] = [
       `UPDATE source_file SET watermark = '0' WHERE harness = 'cursor'`,
     ],
   },
+  {
+    version: 5,
+    statements: [
+      `ALTER TABLE session ADD COLUMN state_source TEXT`,
+      `ALTER TABLE session ADD COLUMN pid INTEGER`,
+      // Kept separately so a native reader overwriting hook_ts cannot hide that a hook once fired.
+      `ALTER TABLE session ADD COLUMN last_hook_ts TEXT`,
+      `UPDATE session SET state_source = 'hook', last_hook_ts = hook_ts WHERE hook_ts IS NOT NULL`,
+    ],
+  },
 ];
 
 export function migrate(db: DatabaseSync): void {

@@ -8,6 +8,7 @@ import type {
   Harness,
   IntegrationHealth,
   SessionRecord,
+  StateSource,
   SuggestionRecord,
   SuggestionStatus,
   TurnRecord,
@@ -143,17 +144,24 @@ export class Store {
       );
   }
 
-  // Hook events are the only writer of session state.
   applyHookState(row: HookStateWrite): void {
+    this.applyState({ ...row, source: "hook", pid: null, title: null });
+  }
+
+  // Hook events and native readers are the only writers of session state; the newest report wins.
+  applyState(row: StateWrite): void {
     this
       .statement(
-        `INSERT INTO session(id, harness, native_id, cwd, state, has_blocking, hook_ts, hook_event, last_ts, started_at, parent_id, agent_type, is_sidechain)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO session(id, harness, native_id, cwd, title, state, has_blocking, hook_ts, hook_event, state_source, pid, last_hook_ts, last_ts, started_at, parent_id, agent_type, is_sidechain)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            cwd = COALESCE(excluded.cwd, session.cwd),
+           title = COALESCE(excluded.title, session.title),
            parent_id = COALESCE(excluded.parent_id, session.parent_id),
            agent_type = COALESCE(excluded.agent_type, session.agent_type),
            is_sidechain = MAX(excluded.is_sidechain, session.is_sidechain),
+           pid = COALESCE(excluded.pid, session.pid),
+           last_hook_ts = MAX(COALESCE(excluded.last_hook_ts, ''), COALESCE(session.last_hook_ts, '')),
            state = CASE
              WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
              THEN excluded.state ELSE session.state END,
@@ -163,6 +171,9 @@ export class Store {
            hook_event = CASE
              WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
              THEN excluded.hook_event ELSE session.hook_event END,
+           state_source = CASE
+             WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
+             THEN excluded.state_source ELSE session.state_source END,
            hook_ts = CASE
              WHEN session.hook_ts IS NULL OR excluded.hook_ts >= session.hook_ts
              THEN excluded.hook_ts ELSE session.hook_ts END,
@@ -175,16 +186,34 @@ export class Store {
         row.harness,
         row.nativeId,
         row.cwd,
+        row.title,
         row.state,
         row.hasBlocking ? 1 : 0,
         row.ts,
         row.eventType,
+        row.source,
+        row.pid,
+        row.source === "hook" ? row.ts : null,
         row.ts,
         row.ts,
         row.parentId ?? null,
         row.agentType ?? null,
         row.parentId ? 1 : 0,
       );
+  }
+
+  // Newest hook event per harness, regardless of what has overwritten the session's state since.
+  lastHookEventAt(): Partial<Record<Harness, string>> {
+    const rows = asRows<Array<{ harness: Harness; ts: string | null }>>(
+      this.db.prepare(`SELECT harness, MAX(last_hook_ts) AS ts FROM session GROUP BY harness`).all(),
+    );
+    const out: Partial<Record<Harness, string>> = {};
+    for (const row of rows) {
+      if (row.ts) {
+        out[row.harness] = row.ts;
+      }
+    }
+    return out;
   }
 
   insertTurn(turn: TurnRecord): boolean {
@@ -524,6 +553,8 @@ interface SessionRow {
   agent_type: string | null;
   hook_ts?: string | null;
   hook_event?: string | null;
+  state_source?: string | null;
+  pid?: number | null;
   last_text?: string | null;
   last_role?: string | null;
 }
@@ -540,6 +571,13 @@ export interface HookStateWrite {
   // Set when the event fired inside a subagent, which may report before its transcript is read.
   parentId?: string | null;
   agentType?: string | null;
+}
+
+// A state report with its provenance; eventType names the hook or the native record it came from.
+export interface StateWrite extends HookStateWrite {
+  source: StateSource;
+  pid: number | null;
+  title: string | null;
 }
 
 interface TurnRow {
@@ -656,6 +694,8 @@ function mapSession(row: SessionRow): SessionRecord {
     hasBlocking: row.has_blocking === 1,
     hookTs: row.hook_ts ?? null,
     hookEvent: row.hook_event ?? null,
+    stateSource: (row.state_source as StateSource | null | undefined) ?? null,
+    pid: row.pid ?? null,
     isSidechain: row.is_sidechain === 1,
     parentId: row.parent_id ?? null,
     agentType: row.agent_type ?? null,
