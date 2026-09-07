@@ -74,7 +74,10 @@ function createPanel(): BrowserWindow {
     hiddenInMissionControl: true,
     roundedCorners: true,
     hasShadow: true,
-    backgroundColor: "#f4efe6",
+    // The panel draws its own tinted surface over the system popover material.
+    transparent: true,
+    vibrancy: "popover",
+    visualEffectState: "active",
     webPreferences: {
       preload: resolvePreload(),
       contextIsolation: true,
@@ -147,6 +150,9 @@ function togglePanel(): void {
   panel.show();
   panel.focus();
   panel.webContents.send("sidecar:changed");
+  if (!app.isPackaged) {
+    console.log("panel bounds", JSON.stringify(panel.getBounds()));
+  }
 }
 
 function getService(): SidecarService {
