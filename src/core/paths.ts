@@ -59,6 +59,10 @@ export function codexThreadHistoryDb(root = codexRoot()): string {
   return path.join(root, "thread_history_1.sqlite");
 }
 
+export function codexQueueDb(root = codexRoot()): string {
+  return path.join(root, "queue_1.sqlite");
+}
+
 // Codex holds <thread>.lock here while a process has that thread open.
 export function codexThreadLocksDir(root = codexRoot()): string {
   return path.join(root, "thread-writer-locks");

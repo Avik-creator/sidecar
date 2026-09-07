@@ -61,6 +61,7 @@ export function applyNativeStates(store: Store, options: NativeStateOptions = {}
         pid: state.pid,
         parentId: state.parentId,
         agentType: state.agentType,
+        facts: state.facts,
       });
     }
   });

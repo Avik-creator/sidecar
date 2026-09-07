@@ -107,3 +107,15 @@ export function cwdFromPayload(harness: Harness, payload: unknown): string | nul
   }
   return asString(rec.cwd);
 }
+
+// A tool starts on the pre event and is over on the post event; other events say nothing about it.
+export function lastToolFromEvent(type: string, payload: unknown): string | null | undefined {
+  const lower = type.toLowerCase();
+  if (lower === "pretooluse") {
+    return asString(asRecord(payload)?.tool_name) ?? asString(asRecord(payload)?.tool) ?? "tool";
+  }
+  if (lower === "posttooluse" || lower === "posttoolusefailure" || lower === "userpromptsubmit" || lower === "stop") {
+    return null;
+  }
+  return undefined;
+}

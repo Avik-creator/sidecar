@@ -17,6 +17,7 @@ import {
   agentTypeFromPayload,
   cwdFromPayload,
   hookOutcome,
+  lastToolFromEvent,
   outcomeForSubagent,
   sessionIdFromPayload,
 } from "../hooks/events.js";
@@ -171,7 +172,7 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
         const agentId = agentIdFromPayload(event.payload);
         const outcome = agentId ? outcomeForSubagent(base) : base;
         const nativeId = agentId ? `${sessionNativeId}:${agentId}` : sessionNativeId;
-        store.applyHookState({
+        store.applyState({
           sessionId: `${event.harness}:${nativeId}`,
           harness: event.harness,
           nativeId,
@@ -182,6 +183,10 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
           eventType: event.type,
           parentId: agentId ? `${event.harness}:${sessionNativeId}` : null,
           agentType: agentId ? agentTypeFromPayload(event.payload) : null,
+          source: "hook",
+          pid: null,
+          title: null,
+          lastTool: lastToolFromEvent(event.type, event.payload),
         });
       }
     });

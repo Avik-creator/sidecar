@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { asBool, asNumber, asRecord, asString } from "../text.js";
 import { ENDED, WORKING, YOUR_TURN, isoFromMs, type NativeState } from "./state.js";
+import type { SessionFacts } from "../../shared/types.js";
 
 // Conversations older than this are left to their transcript row.
 const RECENT_MS = 24 * 60 * 60 * 1000;
@@ -101,6 +102,20 @@ function toState(
     pid: appPid,
     parentId: parent ? `cursor:${parent}` : null,
     agentType: asString(asRecord(headerValue?.subagentInfo)?.subagentTypeName),
+    facts: composerFacts(composer),
+  };
+}
+
+// Cursor keeps its own todo list, queue, and diff counters on every conversation.
+function composerFacts(composer: Record<string, unknown>): SessionFacts {
+  const todos = Array.isArray(composer.todos) ? composer.todos : [];
+  const done = todos.filter((todo) => asString(asRecord(todo)?.status) === "completed").length;
+  return {
+    tasksDone: todos.length > 0 ? done : null,
+    tasksTotal: todos.length > 0 ? todos.length : null,
+    queued: Array.isArray(composer.queueItems) ? composer.queueItems.length : null,
+    linesAdded: typeof composer.totalLinesAdded === "number" ? composer.totalLinesAdded : null,
+    linesRemoved: typeof composer.totalLinesRemoved === "number" ? composer.totalLinesRemoved : null,
   };
 }
 

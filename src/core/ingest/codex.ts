@@ -59,6 +59,7 @@ export function parseCodexLine(filePath: string, line: string, sessionHint?: str
     isSidechain: false,
     parentId: null,
     agentType: null,
+    lastTool: codexLastTool(type, payload, eventType),
   });
 
   if (type === "turn_context") {
@@ -173,12 +174,36 @@ function mapCodexRole(role: string | null): TurnRecord["role"] | null {
       return "system";
     case "function_call_output":
     case "custom_tool_call_output":
+    case "local_shell_call_output":
       return "tool";
     case "function_call":
     case "custom_tool_call":
+    case "local_shell_call":
     case "reasoning":
       return "assistant";
     default:
       return null;
   }
+}
+
+// Tool call items start a tool; their output items and a new user message end it.
+function codexLastTool(
+  type: string | null,
+  payload: Record<string, unknown>,
+  eventType: string | null,
+): string | null | undefined {
+  if (type === "response_item") {
+    const itemType = asString(payload.type) ?? "";
+    if (itemType.endsWith("_call_output")) {
+      return null;
+    }
+    if (itemType === "local_shell_call") {
+      return "shell";
+    }
+    if (itemType === "function_call" || itemType === "custom_tool_call") {
+      return asString(payload.name) ?? "tool";
+    }
+    return undefined;
+  }
+  return type === "event_msg" && eventType === "user_message" ? null : undefined;
 }

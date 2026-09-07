@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { codexStateDb, codexThreadHistoryDb, codexThreadLocksDir } from "../paths.js";
+import { codexQueueDb, codexStateDb, codexThreadHistoryDb, codexThreadLocksDir } from "../paths.js";
 import { asNumber, asString } from "../text.js";
 import { ENDED, WORKING, YOUR_TURN, isoFromMs, type NativeState } from "./state.js";
 
@@ -38,19 +38,46 @@ export function readCodexThreads(root: string, now = Date.now()): NativeState[] 
       .all(Math.floor((now - RECENT_MS) / 1000)) as unknown as ThreadRow[];
     const parents = spawnParents(state);
     const locks = lockedThreads(codexThreadLocksDir(root));
+    const queued = queuedMessages(root);
     const latestTurn = history?.prepare(
       `SELECT status, started_at, completed_at FROM thread_turns WHERE thread_id = ? ORDER BY rollout_ordinal DESC LIMIT 1`,
     );
     const out: NativeState[] = [];
     for (const thread of threads) {
       const turn = (latestTurn?.get(thread.id) as TurnRow | undefined) ?? null;
-      out.push(toState(thread, turn, locks.has(thread.id), parents.get(thread.id) ?? null));
+      out.push({
+        ...toState(thread, turn, locks.has(thread.id), parents.get(thread.id) ?? null),
+        facts: { queued: queued.get(thread.id) ?? 0 },
+      });
     }
     return out;
   } finally {
     state.close();
     history?.close();
   }
+}
+
+// Messages typed while a turn runs wait in queue_1.sqlite until it ends.
+function queuedMessages(root: string): Map<string, number> {
+  const out = new Map<string, number>();
+  const queuePath = codexQueueDb(root);
+  if (!fs.existsSync(queuePath)) {
+    return out;
+  }
+  const db = openReadOnly(queuePath);
+  try {
+    const rows = db
+      .prepare(`SELECT thread_id, COUNT(*) AS n FROM queued_items GROUP BY thread_id`)
+      .all() as unknown as Array<{ thread_id: string; n: number }>;
+    for (const row of rows) {
+      out.set(row.thread_id, row.n);
+    }
+  } catch {
+    // An older queue schema just means no queue counts.
+  } finally {
+    db.close();
+  }
+  return out;
 }
 
 function toState(thread: ThreadRow, turn: TurnRow | null, locked: boolean, parent: string | null): NativeState {
