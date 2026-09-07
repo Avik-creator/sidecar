@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, globalShortcut, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -11,6 +11,9 @@ import { editorCandidates, existingDir, findExecutable, launch } from "./open-in
 import { attentionIds, needsYou, newlyNeedingYou } from "./attention.js";
 import { focusProcess } from "./focus.js";
 import { resumeCommand } from "../core/agents/resume.js";
+import { inQuietHours } from "../core/notify/quiet.js";
+import { quotaAlerts } from "../core/usage/alerts.js";
+import { readSettings } from "../core/settings.js";
 import type { OpenResult, SessionRecord, Settings } from "../shared/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -37,6 +40,11 @@ let lastTrayRefreshAt = 0;
 let lastIngestAt = 0;
 let attentionSeen: Set<string> | null = null;
 let trayFilled = false;
+let registeredHotkey: string | null = null;
+let quotaTimer: ReturnType<typeof setInterval> | null = null;
+const quotaSeen = new Set<string>();
+// Provider probes are rate limited, so the alert check runs far less often than ingest.
+const QUOTA_CHECK_MS = 10 * 60 * 1000;
 
 function resolvePreload(): string {
   const candidates = [
@@ -174,7 +182,11 @@ function bindIpc(): void {
   ipcMain.handle("sidecar:undoSuggestion", (_event, id: string) => getIngestWorker().undoSuggestion(id));
   ipcMain.handle("sidecar:dismissSuggestion", (_event, id: string) => getIngestWorker().dismissSuggestion(id));
   ipcMain.handle("sidecar:settings", () => svc.settings());
-  ipcMain.handle("sidecar:updateSettings", (_event, patch: Partial<Settings>) => svc.updateSettings(patch));
+  ipcMain.handle("sidecar:updateSettings", async (_event, patch: Partial<Settings>) => {
+    const next = await svc.updateSettings(patch);
+    applyPreferences(next);
+    return next;
+  });
   ipcMain.handle("sidecar:hooksStatus", () => svc.hooksStatus());
   ipcMain.handle("sidecar:installHooks", () => svc.installHooks());
   ipcMain.handle("sidecar:uninstallHooks", () => svc.uninstallHooks());
@@ -313,10 +325,62 @@ function trayTooltip(attention: number, working: number): string {
   return parts.length > 0 ? `Sidecar — ${parts.join(" · ")}` : "Sidecar";
 }
 
+// Login item, panel shortcut, and quota polling follow the settings file; called at launch and on change.
+function applyPreferences(settings: Settings): void {
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
+  }
+  if (registeredHotkey && registeredHotkey !== settings.hotkey) {
+    globalShortcut.unregister(registeredHotkey);
+    registeredHotkey = null;
+  }
+  if (settings.hotkey && registeredHotkey !== settings.hotkey) {
+    try {
+      if (globalShortcut.register(settings.hotkey, () => togglePanel())) {
+        registeredHotkey = settings.hotkey;
+      } else {
+        console.warn(`shortcut ${settings.hotkey} is taken by another app`);
+      }
+    } catch (error) {
+      console.warn(`shortcut ${settings.hotkey} is not a valid accelerator`, error);
+    }
+  }
+  if (quotaTimer) {
+    clearInterval(quotaTimer);
+    quotaTimer = null;
+  }
+  if (settings.quotaAlertPct > 0) {
+    quotaTimer = setInterval(() => void checkQuota(), QUOTA_CHECK_MS);
+    void checkQuota();
+  }
+}
+
+async function checkQuota(): Promise<void> {
+  const settings = readSettings();
+  if (settings.quotaAlertPct <= 0 || !Notification.isSupported()) {
+    return;
+  }
+  try {
+    const report = await getService().usage(1);
+    for (const alert of quotaAlerts(report.live, settings.quotaAlertPct, quotaSeen)) {
+      if (quietNow(settings)) {
+        continue;
+      }
+      new Notification({ title: alert.title, body: alert.body }).show();
+    }
+  } catch (error) {
+    console.warn("quota check failed", error);
+  }
+}
+
+function quietNow(settings: Settings): boolean {
+  return inQuietHours(new Date(), settings.quietFrom, settings.quietTo);
+}
+
 function notifyAttention(sessions: SessionRecord[]): void {
   const previous = attentionSeen;
   attentionSeen = attentionIds(sessions);
-  if (!Notification.isSupported()) {
+  if (!Notification.isSupported() || quietNow(readSettings())) {
     return;
   }
   for (const session of newlyNeedingYou(previous, sessions, MAX_NOTIFICATIONS_PER_REFRESH)) {
@@ -466,6 +530,7 @@ if (!gotLock) {
     void ensureHooksInstalled();
     panel = createPanel();
     createTray();
+    applyPreferences(readSettings());
     watchSources();
     lastSourceSignature = sourceSignature();
     setTimeout(() => {
@@ -482,6 +547,10 @@ app.on("before-quit", () => {
   if (pollTimer) {
     clearInterval(pollTimer);
   }
+  if (quotaTimer) {
+    clearInterval(quotaTimer);
+  }
+  globalShortcut.unregisterAll();
   if (panel) {
     panel.removeAllListeners("close");
     panel.destroy();

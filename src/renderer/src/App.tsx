@@ -266,6 +266,7 @@ export default function App() {
             busy={busy}
             onInstall={() => void run(() => window.sidecar.installHooks())}
             onUninstall={() => void run(() => window.sidecar.uninstallHooks())}
+            onSetting={(patch) => void run(async () => setSettings(await window.sidecar.updateSettings(patch)))}
           />
         )}
         {tab === "usage" && <UsageView usage={usage} />}
@@ -607,6 +608,7 @@ const SetupView = memo(function SetupView({
   busy,
   onInstall,
   onUninstall,
+  onSetting,
 }: {
   items: SetupItemRecord[];
   hooks: HookStatus[];
@@ -614,6 +616,7 @@ const SetupView = memo(function SetupView({
   busy: boolean;
   onInstall: () => void;
   onUninstall: () => void;
+  onSetting: (patch: Partial<Settings>) => void;
 }) {
   const [kind, setKind] = useState<"all" | SetupKind>("all");
   const [source, setSource] = useState<"all" | SetupSource>("all");
@@ -683,6 +686,8 @@ const SetupView = memo(function SetupView({
         It adds one entry per event, backs the file up first, and leaves entries owned by other tools
         alone.
       </p>
+      <Section title="Preferences" />
+      <Preferences settings={settings} busy={busy} onSetting={onSetting} />
       <Section title="Installed" />
       <div className="setup-summary">
         <button type="button" onClick={() => setKind("skill")}>
@@ -744,6 +749,85 @@ const SetupView = memo(function SetupView({
     </>
   );
 });
+
+// Launch at login, the panel shortcut, quiet hours, and the quota alert, each saved as it changes.
+function Preferences({
+  settings,
+  busy,
+  onSetting,
+}: {
+  settings: Settings | null;
+  busy: boolean;
+  onSetting: (patch: Partial<Settings>) => void;
+}) {
+  const [hotkey, setHotkey] = useState(settings?.hotkey ?? "");
+  useEffect(() => setHotkey(settings?.hotkey ?? ""), [settings?.hotkey]);
+  if (!settings) {
+    return null;
+  }
+  return (
+    <div className="prefs">
+      <label className="setting-row">
+        <input
+          type="checkbox"
+          checked={settings.launchAtLogin}
+          disabled={busy}
+          onChange={(event) => onSetting({ launchAtLogin: event.target.checked })}
+        />
+        <span>Open Sidecar at login.</span>
+      </label>
+      <label className="pref-row">
+        <span>Panel shortcut</span>
+        <input
+          className="pref-input"
+          value={hotkey}
+          disabled={busy}
+          placeholder="none"
+          spellCheck={false}
+          onChange={(event) => setHotkey(event.target.value)}
+          onBlur={() => onSetting({ hotkey: hotkey.trim() || null })}
+          onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
+        />
+      </label>
+      <label className="pref-row">
+        <span>Quiet hours</span>
+        <span className="pref-times">
+          <input
+            className="pref-input"
+            type="time"
+            value={settings.quietFrom ?? ""}
+            disabled={busy}
+            onChange={(event) => onSetting({ quietFrom: event.target.value || null })}
+          />
+          <span className="muted">to</span>
+          <input
+            className="pref-input"
+            type="time"
+            value={settings.quietTo ?? ""}
+            disabled={busy}
+            onChange={(event) => onSetting({ quietTo: event.target.value || null })}
+          />
+        </span>
+      </label>
+      <label className="pref-row">
+        <span>Quota alert at</span>
+        <span className="pref-times">
+          <input
+            className="pref-input pref-pct"
+            type="number"
+            min={0}
+            max={100}
+            step={5}
+            value={settings.quotaAlertPct}
+            disabled={busy}
+            onChange={(event) => onSetting({ quotaAlertPct: Number(event.target.value) })}
+          />
+          <span className="muted">% used, 0 for never</span>
+        </span>
+      </label>
+    </div>
+  );
+}
 
 function setupSourceLabel(source: SetupSource): string {
   switch (source) {
