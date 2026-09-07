@@ -324,6 +324,10 @@ export interface SidecarShell {
   quitApp: () => Promise<void>;
   openInEditor: (session: SessionRecord) => Promise<OpenResult>;
   openInTerminal: (session: SessionRecord) => Promise<OpenResult>;
+  // Brings the window running this session to the front.
+  focusSession: (session: SessionRecord) => Promise<OpenResult>;
+  // Puts the resume command on the clipboard; opened carries the command text.
+  copyResume: (session: SessionRecord) => Promise<OpenResult>;
 }
 
 export interface OpenResult {

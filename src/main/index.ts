@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, screen, shell, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,8 @@ import { createTrayImage } from "./tray-icon.js";
 import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
 import { editorCandidates, existingDir, findExecutable, launch } from "./open-in.js";
 import { attentionIds, needsYou, newlyNeedingYou } from "./attention.js";
+import { focusProcess } from "./focus.js";
+import { resumeCommand } from "../core/agents/resume.js";
 import type { OpenResult, SessionRecord, Settings } from "../shared/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -188,6 +190,8 @@ function bindIpc(): void {
   });
   ipcMain.handle("sidecar:openInEditor", (_event, session: SessionRecord) => openInEditor(session));
   ipcMain.handle("sidecar:openInTerminal", (_event, session: SessionRecord) => openInTerminal(session));
+  ipcMain.handle("sidecar:focusSession", (_event, session: SessionRecord) => focusSession(session));
+  ipcMain.handle("sidecar:copyResume", (_event, session: SessionRecord) => copyResume(session));
 }
 
 // Hooks are how Sidecar sees anything, so a launch repairs them before the first ingest.
@@ -320,13 +324,34 @@ function notifyAttention(sessions: SessionRecord[]): void {
       title: `${harnessLabel(session.harness)} ${session.hasBlocking ? "needs permission" : "is waiting on you"}`,
       body: session.activity || session.title || repoName(session.cwd) || session.nativeId.slice(0, 8),
     });
+    // Land on the window that is waiting; fall back to the panel when there is no window to find.
     notification.on("click", () => {
-      if (!panel?.isVisible()) {
+      if (!focusSession(session).ok && !panel?.isVisible()) {
         togglePanel();
       }
     });
     notification.show();
   }
+}
+
+function focusSession(session: SessionRecord): OpenResult {
+  if (session.pid != null) {
+    return focusProcess(session.pid);
+  }
+  if (session.harness === "cursor" && process.platform === "darwin") {
+    launch("/usr/bin/open", ["-a", "Cursor"]);
+    return { ok: true, opened: "Cursor", error: null };
+  }
+  return { ok: false, opened: null, error: "Sidecar does not know which window this session is in." };
+}
+
+function copyResume(session: SessionRecord): OpenResult {
+  const command = resumeCommand(session);
+  if (!command) {
+    return { ok: false, opened: null, error: "This harness has no resume command." };
+  }
+  clipboard.writeText(command);
+  return { ok: true, opened: command, error: null };
 }
 
 function harnessLabel(harness: SessionRecord["harness"]): string {

@@ -721,3 +721,8 @@ pre {
   content: "·";
   margin-right: 8px;
 }
+
+.card-note.ok {
+  color: var(--ok);
+  word-break: break-all;
+}

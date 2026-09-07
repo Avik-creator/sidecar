@@ -502,7 +502,10 @@ function AgentCard({
   attention?: boolean;
 }) {
   const [note, setNote] = useState<string | null>(null);
+  const [noteTone, setNoteTone] = useState<"" | "ok">("");
   const now = useClock(session.state === "active");
+  // A live process, or the Cursor app, is a window Sidecar can bring to the front.
+  const canFocus = session.pid != null || session.harness === "cursor";
   const status =
     session.state === "needs_attention" || session.hasBlocking
       ? "waiting"
@@ -536,17 +539,30 @@ function AgentCard({
           ))}
         </div>
       )}
-      {session.cwd && (
+      {(session.cwd || canFocus) && (
         <div className="row card-actions">
-          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>
-            Editor
-          </button>
-          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInTerminal)}>
-            Terminal
-          </button>
+          {canFocus ? (
+            <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.focusSession)}>
+              Go to
+            </button>
+          ) : (
+            <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInTerminal)}>
+              Terminal
+            </button>
+          )}
+          {session.cwd && (
+            <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>
+              Editor
+            </button>
+          )}
+          {session.harness !== "cursor" && (
+            <button className="btn" type="button" onClick={() => void copyResume()}>
+              Copy resume
+            </button>
+          )}
         </div>
       )}
-      {note && <p className="muted card-note">{note}</p>}
+      {note && <p className={`muted card-note ${noteTone}`}>{note}</p>}
       {subagents && subagents.length > 0 && (
         <ul className="subagents">
           {subagents.map((child) => (
@@ -564,8 +580,21 @@ function AgentCard({
   async function openWith(open: (target: SessionRecord) => Promise<OpenResult>): Promise<void> {
     try {
       const result = await open(session);
+      setNoteTone("");
       setNote(result.ok ? null : (result.error ?? "Could not open this session."));
     } catch (error) {
+      setNoteTone("");
+      setNote(String(error));
+    }
+  }
+
+  async function copyResume(): Promise<void> {
+    try {
+      const result = await window.sidecarShell.copyResume(session);
+      setNoteTone(result.ok ? "ok" : "");
+      setNote(result.ok ? `Copied: ${result.opened}` : (result.error ?? "Nothing to copy."));
+    } catch (error) {
+      setNoteTone("");
       setNote(String(error));
     }
   }
