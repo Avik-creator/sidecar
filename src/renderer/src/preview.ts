@@ -24,6 +24,8 @@ function previewShell(): SidecarShell {
     quitApp: async () => undefined,
     openInEditor: async () => ({ ok: true, opened: "code", error: null }),
     openInTerminal: async () => ({ ok: true, opened: "Terminal", error: null }),
+    focusSession: async () => ({ ok: true, opened: "Terminal", error: null }),
+    copyResume: async () => ({ ok: true, opened: "claude --resume preview", error: null }),
   };
 }
 

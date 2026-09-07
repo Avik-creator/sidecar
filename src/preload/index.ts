@@ -27,6 +27,8 @@ const shellApi: SidecarShell = {
   quitApp: () => ipcRenderer.invoke("sidecar:quitApp"),
   openInEditor: (session) => ipcRenderer.invoke("sidecar:openInEditor", session),
   openInTerminal: (session) => ipcRenderer.invoke("sidecar:openInTerminal", session),
+  focusSession: (session) => ipcRenderer.invoke("sidecar:focusSession", session),
+  copyResume: (session) => ipcRenderer.invoke("sidecar:copyResume", session),
 };
 
 contextBridge.exposeInMainWorld("sidecar", api);
