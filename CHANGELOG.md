@@ -3,6 +3,77 @@
 All notable changes to Sidecar are recorded here. Versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-09-08
+
+The release that stops depending on hooks. Every harness already writes its
+live state to disk, so Sidecar now reads that directly, tells you what each
+agent is doing and for how long, and takes you to the window it is running in.
+
+### Added
+
+- **Native state readers.** Claude Code's session registry
+  (`~/.claude/sessions/<pid>.json`), Codex's thread tables and lock files, and
+  Cursor's composer records each set a session's state on their own. Hooks
+  remain the sub-second signal for permission prompts, but nothing depends on
+  them any more.
+- **Process liveness.** A session whose process is gone reads as ended at once,
+  and a live process keeps a busy session active however long the turn runs.
+  Codex publishes no pid, so a locked thread is matched to its process by
+  working directory.
+- **Codex subagents** are linked to their parent through `thread_spawn_edges`.
+- **An activity line per session**: `Running command · 1m 12s`, `Editing`,
+  `Thinking`, `Needs permission`, `Your turn`. The tool comes from Claude
+  `tool_use` blocks, Codex tool-call items, or PreToolUse hooks, and clears
+  when the result arrives.
+- **Facts per session**: model, tokens and estimated spend with subagents
+  rolled into their parent, task progress, lines added and removed, and queued
+  messages, each shown only when the harness publishes it.
+- **Go to.** Click a row to bring the window running that agent to the front.
+  Terminal and iTerm2 get the exact tab by tty; VS Code, Cursor, and other
+  hosts come to the front. A notification click lands on the same window.
+- **Copy resume** puts `claude --resume <id>` or `codex resume <id>` on the
+  clipboard, with a `cd` into the session's folder.
+- **Preferences**: open at login, a panel shortcut (default `Alt+Shift+S`),
+  quiet hours, and a quota alert at a chosen percent of a plan window.
+- **Dark mode**, following the system theme, and a translucent popover surface.
+- The tray mark turns solid while any agent is working.
+- Setup flags a hook that is installed but has never fired as **Installed,
+  silent**, since that was the failure hiding every state on this machine.
+
+### Changed
+
+- **The Agents tab lists rows, not cards.** One line per session with the
+  harness glyph, title, activity, and facts; a spinner or dot for state; and the
+  time. Editor and Copy resume appear on hover or keyboard focus, and the arrow
+  keys walk the list.
+- The tab bar is a text segmented control, the wordmark is small, and the
+  footer with its harness chips is gone.
+- The bell badge and the "Needs you" section no longer restate each other.
+
+### Fixed
+
+- Session state no longer stays at "Not reporting" when hooks never fire.
+- The Codex note in Setup wraps at word boundaries instead of mid-word.
+
+### Migrations
+
+- **5** adds `state_source`, `pid`, and `last_hook_ts` to `session`, and
+  backfills provenance for rows that already had a hook event.
+- **6** adds `last_tool`, `tasks_done`, `tasks_total`, `queued`, `lines_added`,
+  and `lines_removed` to `session`. No transcripts are re-read.
+
+### Known limitations
+
+- Codex and Cursor have no on-disk signal for a permission prompt, so
+  **Needs permission** for them still requires the hook, which in Codex means
+  trusting the entries in `/hooks`.
+- Why Claude Code never runs Sidecar's hook entries is still open; the native
+  readers make it non-blocking.
+- Cursor CLI sessions under `~/.cursor/projects/*/agent-transcripts` are not
+  ingested yet.
+- Spend uses the existing price table, which prices unknown models at the
+  default.
+
 ## [0.2.0] — 2026-09-06
 
 The release that makes session state trustworthy. Sidecar used to infer what an
