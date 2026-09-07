@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { codexQueueDb, codexStateDb, codexThreadHistoryDb, codexThreadLocksDir } from "../paths.js";
 import { asNumber, asString } from "../text.js";
+import { processesByCwd } from "./process.js";
 import { ENDED, WORKING, YOUR_TURN, isoFromMs, type NativeState } from "./state.js";
 
 // Threads untouched for this long are not shown as anything; their transcript row still exists.
@@ -25,7 +26,11 @@ interface TurnRow {
 }
 
 // Reads Codex's thread tables; a thread is live while Codex holds its lock file.
-export function readCodexThreads(root: string, now = Date.now()): NativeState[] {
+export function readCodexThreads(
+  root: string,
+  now = Date.now(),
+  pidByCwd: () => Map<string, number> = () => processesByCwd("codex"),
+): NativeState[] {
   const statePath = codexStateDb(root);
   if (!fs.existsSync(statePath)) {
     return [];
@@ -42,11 +47,15 @@ export function readCodexThreads(root: string, now = Date.now()): NativeState[] 
     const latestTurn = history?.prepare(
       `SELECT status, started_at, completed_at FROM thread_turns WHERE thread_id = ? ORDER BY rollout_ordinal DESC LIMIT 1`,
     );
+    // Codex publishes no pid, so a locked thread is matched to a codex process by working directory.
+    const pids = locks.size > 0 ? pidByCwd() : new Map<string, number>();
     const out: NativeState[] = [];
     for (const thread of threads) {
       const turn = (latestTurn?.get(thread.id) as TurnRow | undefined) ?? null;
+      const locked = locks.has(thread.id);
       out.push({
-        ...toState(thread, turn, locks.has(thread.id), parents.get(thread.id) ?? null),
+        ...toState(thread, turn, locked, parents.get(thread.id) ?? null),
+        pid: locked && thread.cwd ? (pids.get(thread.cwd) ?? null) : null,
         facts: { queued: queued.get(thread.id) ?? 0 },
       });
     }

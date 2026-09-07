@@ -1,9 +1,8 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import type {
   CandidateRecord,
   ClusterRecord,
   Harness,
-  HealthReport,
   HookStatus,
   LiveUsageSnapshot,
   LiveUsageStatus,
@@ -17,16 +16,7 @@ import type {
   UsageReport,
   UsageWindow,
 } from "@shared/types";
-import {
-  AgentsIcon,
-  BellIcon,
-  HarnessMark,
-  ImproveIcon,
-  PinIcon,
-  SetupIcon,
-  SidecarMark,
-  UsageIcon,
-} from "./icons";
+import { BellIcon, HarnessMark, PinIcon, SearchIcon, SidecarMark } from "./icons";
 import { installPreviewBridge } from "./preview";
 import { activityLabel, formatTokens, shortModel } from "@shared/activity";
 
@@ -45,7 +35,6 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<HealthReport | null>(null);
   const [sessions, setSessions] = useState<SessionRecord[]>([]);
   const [setup, setSetup] = useState<SetupItemRecord[]>([]);
   const [usage, setUsage] = useState<UsageReport | null>(null);
@@ -62,12 +51,7 @@ export default function App() {
   const scrollEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshAgents = useCallback(async () => {
-    const [nextHealth, nextSessions] = await Promise.all([
-      window.sidecar.health(),
-      window.sidecar.sessions(),
-    ]);
-    setHealth(nextHealth);
-    setSessions(nextSessions);
+    setSessions(await window.sidecar.sessions());
   }, []);
 
   const refreshHooks = useCallback(async () => {
@@ -205,21 +189,35 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <button
-          className={`icon-btn ${pinned ? "active" : ""}`}
-          title="Keep open"
-          type="button"
-          onClick={() => {
-            const next = !pinned;
-            setPinned(next);
-            void window.sidecarShell.setPinned(next);
-          }}
-        >
-          <PinIcon />
-        </button>
+        <div className="header-side">
+          <button
+            className={`icon-btn ${pinned ? "active" : ""}`}
+            title="Keep open"
+            type="button"
+            onClick={() => {
+              const next = !pinned;
+              setPinned(next);
+              void window.sidecarShell.setPinned(next);
+            }}
+          >
+            <PinIcon />
+          </button>
+          <button
+            className={`icon-btn ${searchOpen ? "active" : ""}`}
+            title="Search (⌘F)"
+            type="button"
+            onClick={() => {
+              setTab("agents");
+              setSearchOpen((open) => !open);
+              setQuery("");
+            }}
+          >
+            <SearchIcon />
+          </button>
+        </div>
         <div className="brand">
-          Sidecar
           <SidecarMark className="flower" />
+          Sidecar
         </div>
         <button
           className="icon-btn"
@@ -233,17 +231,10 @@ export default function App() {
       </header>
 
       <nav className="tabs" aria-label="Sidecar surfaces">
-        <TabButton id="agents" tab={tab} onClick={setTab} label="Agents" icon={<AgentsIcon />} />
-        <TabButton id="setup" tab={tab} onClick={setTab} label="Setup" icon={<SetupIcon />} />
-        <TabButton id="usage" tab={tab} onClick={setTab} label="Usage" icon={<UsageIcon />} />
-        <TabButton
-          id="improve"
-          tab={tab}
-          onClick={setTab}
-          label="Improve"
-          icon={<ImproveIcon />}
-          badge={proposed}
-        />
+        <TabButton id="agents" tab={tab} onClick={setTab} label="Agents" />
+        <TabButton id="setup" tab={tab} onClick={setTab} label="Setup" />
+        <TabButton id="usage" tab={tab} onClick={setTab} label="Usage" />
+        <TabButton id="improve" tab={tab} onClick={setTab} label="Improve" badge={proposed} />
       </nav>
 
       <main className="body" onScroll={handleBodyScroll}>
@@ -266,6 +257,7 @@ export default function App() {
             busy={busy}
             onInstall={() => void run(() => window.sidecar.installHooks())}
             onUninstall={() => void run(() => window.sidecar.uninstallHooks())}
+            onSetting={(patch) => void run(async () => setSettings(await window.sidecar.updateSettings(patch)))}
           />
         )}
         {tab === "usage" && <UsageView usage={usage} />}
@@ -285,26 +277,6 @@ export default function App() {
         )}
       </main>
 
-      <footer className="footer">
-        <div className="integrations">
-          {(["claude", "codex", "cursor"] as const).map((harness) => {
-            const status = health?.integrations.find((item) => item.harness === harness)?.status;
-            return (
-              <span
-                key={harness}
-                className={`integration ${status === "ok" ? "ok" : ""}`}
-                title={`${providerLabel(harness)}: ${status ?? "offline"}`}
-              >
-                <HarnessMark harness={harness} />
-                {harness === "claude" ? "Claude" : providerLabel(harness)}
-              </span>
-            );
-          })}
-        </div>
-        <button className="kbd" type="button" onClick={() => setSearchOpen(true)}>
-          ⌘F
-        </button>
-      </footer>
     </div>
   );
 }
@@ -324,6 +296,7 @@ function AgentsView({
   onQuery: (value: string) => void;
   onOpenSetup: () => void;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const rows = needle
@@ -335,7 +308,7 @@ function AgentsView({
             .includes(needle),
         )
       : sessions;
-    // Subagents hang off their parent's card, so they never take a row of their own.
+    // Subagents hang off their parent's row, so they never take a row of their own.
     const children = new Map<string, SessionRecord[]>();
     for (const session of rows) {
       if (!session.parentId || session.state !== "active") {
@@ -353,7 +326,7 @@ function AgentsView({
         session.state === "active" &&
         !top.some((parent) => parent.id === session.parentId),
     );
-    // Recently touched but never reported through a hook, so Sidecar cannot say what it is doing.
+    // Recently touched but never reported, so Sidecar cannot say what it is doing.
     const cutoff = Date.now() - NOT_REPORTING_WINDOW_MS;
     const silent = top.filter(
       (session) => session.state === "unknown" && Date.parse(session.lastTs ?? "") >= cutoff,
@@ -361,8 +334,24 @@ function AgentsView({
     return { needs, running, orphans, silent, children };
   }, [sessions, query]);
 
+  // Arrow keys walk the rows; Enter is handled by the focused row itself.
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+      return;
+    }
+    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-row]") ?? [])];
+    if (rows.length === 0) {
+      return;
+    }
+    const index = rows.indexOf(document.activeElement as HTMLElement);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next = index < 0 ? rows[0] : rows[Math.min(rows.length - 1, Math.max(0, index + step))];
+    next?.focus();
+    event.preventDefault();
+  };
+
   return (
-    <>
+    <div ref={listRef} onKeyDown={onKeyDown}>
       {searchOpen && (
         <input
           autoFocus
@@ -376,12 +365,7 @@ function AgentsView({
       {filtered.needs.length > 0 && (
         <Section title="Needs you">
           {filtered.needs.map((session) => (
-            <AgentCard
-              key={session.id}
-              session={session}
-              subagents={filtered.children.get(session.id)}
-              attention
-            />
+            <AgentRow key={session.id} session={session} subagents={filtered.children.get(session.id)} attention />
           ))}
         </Section>
       )}
@@ -393,38 +377,32 @@ function AgentsView({
           />
         ) : (
           filtered.running.map((session) => (
-            <AgentCard
-              key={session.id}
-              session={session}
-              subagents={filtered.children.get(session.id)}
-            />
+            <AgentRow key={session.id} session={session} subagents={filtered.children.get(session.id)} />
           ))
         )}
       </Section>
       {filtered.orphans.length > 0 && (
         <Section title="Subagents">
           {filtered.orphans.map((session) => (
-            <AgentCard key={session.id} session={session} />
+            <AgentRow key={session.id} session={session} />
           ))}
         </Section>
       )}
       {filtered.silent.length > 0 && (
         <Section title="Not reporting">
           {filtered.silent.slice(0, NOT_REPORTING_MAX_ROWS).map((session) => (
-            <AgentCard key={session.id} session={session} />
+            <AgentRow key={session.id} session={session} />
           ))}
           {filtered.silent.length > NOT_REPORTING_MAX_ROWS && (
-            <p className="muted usage-note">
-              {filtered.silent.length - NOT_REPORTING_MAX_ROWS} more without hook events.
-            </p>
+            <p className="muted usage-note">{filtered.silent.length - NOT_REPORTING_MAX_ROWS} more without live state.</p>
           )}
         </Section>
       )}
-    </>
+    </div>
   );
 }
 
-// Ticks once a second while a turn runs so the elapsed time on the card stays honest.
+// Ticks once a second while a turn runs so the elapsed time on the row stays honest.
 function useClock(running: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -438,7 +416,7 @@ function useClock(running: boolean): number {
   return now;
 }
 
-// The counters a harness publishes for this session, each already formatted for the card.
+// The counters a harness publishes for this session, each already formatted for the row.
 function sessionFacts(session: SessionRecord): string[] {
   const out: string[] = [];
   const model = shortModel(session.model);
@@ -462,7 +440,7 @@ function sessionFacts(session: SessionRecord): string[] {
 
 // A subagent's own turns describe its task; the parent's activity would just repeat the session title.
 function subagentTask(session: SessionRecord): string {
-  return session.activity || session.title || "working";
+  return session.activity || session.title || session.nativeId.split(":").at(-1)?.slice(0, 8) || "working";
 }
 
 function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup: () => void }) {
@@ -472,14 +450,10 @@ function HooksBanner({ hooks, onOpenSetup }: { hooks: HookStatus[]; onOpenSetup:
     return null;
   }
   return (
-    <div className="card hooks-banner">
-      <p className="card-title">No live state from {joinLabels(missing.map((s) => providerLabel(s.harness)))}</p>
-      <p className="muted">
-        Agents report what they are doing through hooks. Until those are installed Sidecar can list
-        sessions but cannot tell you which ones need you.
-      </p>
-      <button className="btn primary" type="button" onClick={onOpenSetup}>
-        Install hooks
+    <div className="notice">
+      <span>No permission prompts from {joinLabels(missing.map((s) => providerLabel(s.harness)))} until hooks are installed.</span>
+      <button className="link" type="button" onClick={onOpenSetup}>
+        Install
       </button>
     </div>
   );
@@ -492,7 +466,8 @@ function joinLabels(labels: string[]): string {
   return `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
 }
 
-function AgentCard({
+// One line per session: click or Enter goes to it, hover shows the rest.
+function AgentRow({
   session,
   subagents,
   attention = false,
@@ -502,73 +477,104 @@ function AgentCard({
   attention?: boolean;
 }) {
   const [note, setNote] = useState<string | null>(null);
+  const [noteTone, setNoteTone] = useState<"" | "ok">("");
   const now = useClock(session.state === "active");
-  const status =
-    session.state === "needs_attention" || session.hasBlocking
-      ? "waiting"
-      : session.isSidechain
-        ? "subagent"
-        : session.state === "active"
-          ? "working"
-          : session.state === "unknown"
-            ? "silent"
-            : "idle";
-  const facts = sessionFacts(session);
+  // A live process, or the Cursor app, is a window Sidecar can bring to the front.
+  const canFocus = session.pid != null || session.harness === "cursor";
+  const primary = canFocus
+    ? window.sidecarShell.focusSession
+    : session.cwd
+      ? window.sidecarShell.openInTerminal
+      : null;
+  const title = session.activity || session.title || session.nativeId.slice(0, 8);
+  const detail = [repoLabel(session), activityLabel(session, now), ...sessionFacts(session)].filter(Boolean).join(" · ");
   return (
-    <article className={`card ${attention ? "attention" : ""}`}>
-      <div className="agent-card-top">
-        <span className={`harness-badge ${session.harness}`}>
-          <HarnessMark harness={session.harness} />
-          {providerLabel(session.harness)}
-        </span>
-        <span className="agent-time">{relativeTime(session.lastTs)}</span>
-      </div>
-      <p className="card-title">{session.activity || session.title || session.nativeId.slice(0, 8)}</p>
-      <div className="meta">
-        <span>{repoLabel(session)}</span>
-        <span className={`status-pill ${status}`}>{activityLabel(session, now)}</span>
-        <span className={`spin ${session.state === "active" ? "" : "idle"}`} />
-      </div>
-      {facts.length > 0 && (
-        <div className="meta facts">
-          {facts.map((fact) => (
-            <span key={fact}>{fact}</span>
-          ))}
+    <div className="row-block">
+      <div
+        className={`row-item ${attention ? "attention" : ""}`}
+        data-row
+        role="button"
+        tabIndex={0}
+        title={primary ? (canFocus ? "Go to this session" : "Open a terminal here") : undefined}
+        onClick={() => primary && void openWith(primary)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && primary) {
+            void openWith(primary);
+          }
+        }}
+      >
+        <HarnessMark harness={session.harness} className={`row-mark ${session.harness}`} />
+        <div className="row-main">
+          <div className="row-title">{title}</div>
+          <div className="row-sub">{detail}</div>
         </div>
-      )}
-      {session.cwd && (
-        <div className="row card-actions">
-          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>
-            Editor
-          </button>
-          <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInTerminal)}>
-            Terminal
-          </button>
+        <StateMark session={session} />
+        <span className="row-time">{relativeTime(session.lastTs)}</span>
+        <div className="row-actions">
+          {session.cwd && (
+            <button className="link" type="button" onClick={(event) => stop(event, () => openWith(window.sidecarShell.openInEditor))}>
+              Editor
+            </button>
+          )}
+          {session.harness !== "cursor" && (
+            <button className="link" type="button" onClick={(event) => stop(event, copyResume)}>
+              Copy resume
+            </button>
+          )}
         </div>
-      )}
-      {note && <p className="muted card-note">{note}</p>}
+      </div>
+      {note && <p className={`row-note ${noteTone}`}>{note}</p>}
       {subagents && subagents.length > 0 && (
-        <ul className="subagents">
+        <ul className="row-children">
           {subagents.map((child) => (
             <li key={child.id}>
-              <span className="subagent-type">{child.agentType ?? "subagent"}</span>
-              <span className="subagent-task">{subagentTask(child)}</span>
+              <span className="row-kind">{child.agentType ?? "subagent"}</span>
+              <span className="row-task">{subagentTask(child)}</span>
               <span className="spin" />
             </li>
           ))}
         </ul>
       )}
-    </article>
+    </div>
   );
+
+  function stop(event: { stopPropagation: () => void }, action: () => Promise<void>): void {
+    event.stopPropagation();
+    void action();
+  }
 
   async function openWith(open: (target: SessionRecord) => Promise<OpenResult>): Promise<void> {
     try {
       const result = await open(session);
+      setNoteTone("");
       setNote(result.ok ? null : (result.error ?? "Could not open this session."));
     } catch (error) {
+      setNoteTone("");
       setNote(String(error));
     }
   }
+
+  async function copyResume(): Promise<void> {
+    try {
+      const result = await window.sidecarShell.copyResume(session);
+      setNoteTone(result.ok ? "ok" : "");
+      setNote(result.ok ? `Copied: ${result.opened}` : (result.error ?? "Nothing to copy."));
+    } catch (error) {
+      setNoteTone("");
+      setNote(String(error));
+    }
+  }
+}
+
+// Spinner while working, a dot when it is your move; nothing for a session that is done or silent.
+function StateMark({ session }: { session: SessionRecord }) {
+  if (session.state === "active") {
+    return <span className="spin" />;
+  }
+  if (session.state === "needs_attention") {
+    return <span className={`dot ${session.hasBlocking ? "blocked" : "turn"}`} />;
+  }
+  return <span className="dot none" />;
 }
 
 const SetupView = memo(function SetupView({
@@ -578,6 +584,7 @@ const SetupView = memo(function SetupView({
   busy,
   onInstall,
   onUninstall,
+  onSetting,
 }: {
   items: SetupItemRecord[];
   hooks: HookStatus[];
@@ -585,6 +592,7 @@ const SetupView = memo(function SetupView({
   busy: boolean;
   onInstall: () => void;
   onUninstall: () => void;
+  onSetting: (patch: Partial<Settings>) => void;
 }) {
   const [kind, setKind] = useState<"all" | SetupKind>("all");
   const [source, setSource] = useState<"all" | SetupSource>("all");
@@ -640,7 +648,7 @@ const SetupView = memo(function SetupView({
         </div>
       ))}
       <div className="row hook-actions">
-        <button className="btn primary" disabled={busy} type="button" onClick={onInstall}>
+        <button className={`btn ${allInstalled ? "" : "primary"}`} disabled={busy} type="button" onClick={onInstall}>
           {allInstalled ? "Reinstall hooks" : "Install hooks"}
         </button>
         <button className="btn" disabled={busy} type="button" onClick={onUninstall}>
@@ -654,6 +662,8 @@ const SetupView = memo(function SetupView({
         It adds one entry per event, backs the file up first, and leaves entries owned by other tools
         alone.
       </p>
+      <Section title="Preferences" />
+      <Preferences settings={settings} busy={busy} onSetting={onSetting} />
       <Section title="Installed" />
       <div className="setup-summary">
         <button type="button" onClick={() => setKind("skill")}>
@@ -715,6 +725,85 @@ const SetupView = memo(function SetupView({
     </>
   );
 });
+
+// Launch at login, the panel shortcut, quiet hours, and the quota alert, each saved as it changes.
+function Preferences({
+  settings,
+  busy,
+  onSetting,
+}: {
+  settings: Settings | null;
+  busy: boolean;
+  onSetting: (patch: Partial<Settings>) => void;
+}) {
+  const [hotkey, setHotkey] = useState(settings?.hotkey ?? "");
+  useEffect(() => setHotkey(settings?.hotkey ?? ""), [settings?.hotkey]);
+  if (!settings) {
+    return null;
+  }
+  return (
+    <div className="prefs">
+      <label className="setting-row">
+        <input
+          type="checkbox"
+          checked={settings.launchAtLogin}
+          disabled={busy}
+          onChange={(event) => onSetting({ launchAtLogin: event.target.checked })}
+        />
+        <span>Open Sidecar at login.</span>
+      </label>
+      <label className="pref-row">
+        <span>Panel shortcut</span>
+        <input
+          className="pref-input"
+          value={hotkey}
+          disabled={busy}
+          placeholder="none"
+          spellCheck={false}
+          onChange={(event) => setHotkey(event.target.value)}
+          onBlur={() => onSetting({ hotkey: hotkey.trim() || null })}
+          onKeyDown={(event) => event.key === "Enter" && (event.target as HTMLInputElement).blur()}
+        />
+      </label>
+      <label className="pref-row">
+        <span>Quiet hours</span>
+        <span className="pref-times">
+          <input
+            className="pref-input"
+            type="time"
+            value={settings.quietFrom ?? ""}
+            disabled={busy}
+            onChange={(event) => onSetting({ quietFrom: event.target.value || null })}
+          />
+          <span className="muted">to</span>
+          <input
+            className="pref-input"
+            type="time"
+            value={settings.quietTo ?? ""}
+            disabled={busy}
+            onChange={(event) => onSetting({ quietTo: event.target.value || null })}
+          />
+        </span>
+      </label>
+      <label className="pref-row">
+        <span>Quota alert at</span>
+        <span className="pref-times">
+          <input
+            className="pref-input pref-pct"
+            type="number"
+            min={0}
+            max={100}
+            step={5}
+            value={settings.quotaAlertPct}
+            disabled={busy}
+            onChange={(event) => onSetting({ quotaAlertPct: Number(event.target.value) })}
+          />
+          <span className="muted">% used, 0 for never</span>
+        </span>
+      </label>
+    </div>
+  );
+}
 
 function setupSourceLabel(source: SetupSource): string {
   switch (source) {
@@ -1155,20 +1244,17 @@ function TabButton({
   tab,
   onClick,
   label,
-  icon,
   badge,
 }: {
   id: Tab;
   tab: Tab;
   onClick: (tab: Tab) => void;
   label: string;
-  icon: ReactNode;
   badge?: number;
 }) {
   return (
     <button className={`tab ${tab === id ? "active" : ""}`} type="button" onClick={() => onClick(id)}>
-      {icon}
-      <span className="tab-label">{label}</span>
+      {label}
       {badge ? <span className="badge">{badge}</span> : null}
     </button>
   );

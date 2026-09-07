@@ -296,6 +296,14 @@ export interface Settings {
   improveEnabled: boolean;
   improveGlobalRules: boolean;
   hooksAutoInstall: boolean;
+  launchAtLogin: boolean;
+  // Electron accelerator that toggles the panel, or null for none.
+  hotkey: string | null;
+  // "HH:MM" local times; notifications are held between them, overnight ranges allowed.
+  quietFrom: string | null;
+  quietTo: string | null;
+  // Notify when a plan window reaches this percent used; 0 turns it off.
+  quotaAlertPct: number;
 }
 
 export interface SidecarApi {
@@ -324,6 +332,10 @@ export interface SidecarShell {
   quitApp: () => Promise<void>;
   openInEditor: (session: SessionRecord) => Promise<OpenResult>;
   openInTerminal: (session: SessionRecord) => Promise<OpenResult>;
+  // Brings the window running this session to the front.
+  focusSession: (session: SessionRecord) => Promise<OpenResult>;
+  // Puts the resume command on the clipboard; opened carries the command text.
+  copyResume: (session: SessionRecord) => Promise<OpenResult>;
 }
 
 export interface OpenResult {
