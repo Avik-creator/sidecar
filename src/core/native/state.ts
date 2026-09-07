@@ -1,4 +1,4 @@
-import type { Harness, SessionState, StateSource } from "../../shared/types.js";
+import type { Harness, SessionFacts, SessionState, StateSource } from "../../shared/types.js";
 
 // One session's state as read from its harness's own files, before it is written to the store.
 export interface NativeState {
@@ -15,6 +15,7 @@ export interface NativeState {
   pid: number | null;
   parentId: string | null;
   agentType: string | null;
+  facts?: SessionFacts;
 }
 
 export const WORKING = { state: "active", hasBlocking: false } as const;

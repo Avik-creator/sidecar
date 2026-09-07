@@ -28,6 +28,7 @@ import {
   UsageIcon,
 } from "./icons";
 import { installPreviewBridge } from "./preview";
+import { activityLabel, formatTokens, shortModel } from "@shared/activity";
 
 type Tab = "agents" | "setup" | "usage" | "improve";
 
@@ -423,6 +424,42 @@ function AgentsView({
   );
 }
 
+// Ticks once a second while a turn runs so the elapsed time on the card stays honest.
+function useClock(running: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!running) {
+      return undefined;
+    }
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+  return now;
+}
+
+// The counters a harness publishes for this session, each already formatted for the card.
+function sessionFacts(session: SessionRecord): string[] {
+  const out: string[] = [];
+  const model = shortModel(session.model);
+  if (model) {
+    out.push(model);
+  }
+  if (session.tokens) {
+    out.push(`${formatTokens(session.tokens)} tokens${session.usd && session.usd >= 0.005 ? ` · $${session.usd.toFixed(2)}` : ""}`);
+  }
+  if (session.tasksTotal) {
+    out.push(`${session.tasksDone ?? 0}/${session.tasksTotal} tasks`);
+  }
+  if (session.linesAdded || session.linesRemoved) {
+    out.push(`+${session.linesAdded ?? 0} −${session.linesRemoved ?? 0}`);
+  }
+  if (session.queued) {
+    out.push(`${session.queued} queued`);
+  }
+  return out;
+}
+
 // A subagent's own turns describe its task; the parent's activity would just repeat the session title.
 function subagentTask(session: SessionRecord): string {
   return session.activity || session.title || "working";
@@ -465,6 +502,7 @@ function AgentCard({
   attention?: boolean;
 }) {
   const [note, setNote] = useState<string | null>(null);
+  const now = useClock(session.state === "active");
   const status =
     session.state === "needs_attention" || session.hasBlocking
       ? "waiting"
@@ -475,6 +513,7 @@ function AgentCard({
           : session.state === "unknown"
             ? "silent"
             : "idle";
+  const facts = sessionFacts(session);
   return (
     <article className={`card ${attention ? "attention" : ""}`}>
       <div className="agent-card-top">
@@ -487,9 +526,16 @@ function AgentCard({
       <p className="card-title">{session.activity || session.title || session.nativeId.slice(0, 8)}</p>
       <div className="meta">
         <span>{repoLabel(session)}</span>
-        <span className={`status-pill ${status}`}>{status}</span>
+        <span className={`status-pill ${status}`}>{activityLabel(session, now)}</span>
         <span className={`spin ${session.state === "active" ? "" : "idle"}`} />
       </div>
+      {facts.length > 0 && (
+        <div className="meta facts">
+          {facts.map((fact) => (
+            <span key={fact}>{fact}</span>
+          ))}
+        </div>
+      )}
       {session.cwd && (
         <div className="row card-actions">
           <button className="btn" type="button" onClick={() => void openWith(window.sidecarShell.openInEditor)}>

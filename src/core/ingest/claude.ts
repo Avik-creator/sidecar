@@ -28,6 +28,7 @@ export function foldSessions(sessions: SessionRecord[]): SessionRecord[] {
       title: next.title ?? current.title,
       parentId: next.parentId ?? current.parentId,
       agentType: next.agentType ?? current.agentType,
+      lastTool: next.lastTool !== undefined ? next.lastTool : current.lastTool,
       startedAt: current.startedAt ?? next.startedAt,
       endedAt: next.endedAt ?? current.endedAt,
       lastTs: laterOf(current.lastTs, next.lastTs),
@@ -97,6 +98,7 @@ export function parseClaudeLine(filePath: string, line: string): ParsedBatch | "
     parentId,
     // Only the subagent's own lines name its type, and only some of them do.
     agentType: agentId ? asString(rec.attributionAgent) : null,
+    lastTool: claudeLastTool(type, rec),
   });
 
   if (type === "user" || type === "assistant" || type === "system") {
@@ -198,4 +200,21 @@ function sessionIdFromPath(filePath: string): string | null {
     return parts.at(-3) ?? null;
   }
   return base.slice(0, -".jsonl".length);
+}
+
+// An assistant line that calls a tool starts it; the user line carrying its result ends it.
+function claudeLastTool(type: string, rec: Record<string, unknown>): string | null | undefined {
+  const content = asRecord(rec.message)?.content;
+  if (type === "assistant" && Array.isArray(content)) {
+    const calls = content.filter((block) => asString(asRecord(block)?.type) === "tool_use");
+    const name = asString(asRecord(calls.at(-1))?.name);
+    if (name) {
+      return name;
+    }
+    return undefined;
+  }
+  if (type === "user") {
+    return null;
+  }
+  return undefined;
 }

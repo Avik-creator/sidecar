@@ -174,7 +174,7 @@ describe("agent ranking", () => {
       hookTs: new Date().toISOString(),
       lastTs: new Date().toISOString(),
     });
-    const store = { listSessions: () => [child] } as unknown as Store;
+    const store = { listSessions: () => [child], sessionUsage: () => new Map() } as unknown as Store;
     expect(liveSessions(store).map((row) => row.id)).toEqual(["subagent"]);
   });
 });

@@ -35,7 +35,7 @@ function priceForModel(model: string | null): Price {
   return PRICES.default!;
 }
 
-function usdEstimate(
+export function usdEstimate(
   tokensIn: number,
   tokensOut: number,
   cacheRead: number,

@@ -68,6 +68,27 @@ export interface SessionRecord {
   pid?: number | null;
   activity?: string | null;
   lastRole?: TurnRole | null;
+  // Tool currently in flight; null once its result came back, undefined when a parser makes no claim.
+  lastTool?: string | null;
+  // When the current turn began, so the panel can show how long the agent has been at it.
+  lastPromptTs?: string | null;
+  model?: string | null;
+  tokens?: number;
+  usd?: number;
+  tasksDone?: number | null;
+  tasksTotal?: number | null;
+  queued?: number | null;
+  linesAdded?: number | null;
+  linesRemoved?: number | null;
+}
+
+// Counters a harness keeps for a session; only Cursor and Codex publish any of them today.
+export interface SessionFacts {
+  tasksDone?: number | null;
+  tasksTotal?: number | null;
+  queued?: number | null;
+  linesAdded?: number | null;
+  linesRemoved?: number | null;
 }
 
 export interface TurnRecord {

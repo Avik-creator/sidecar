@@ -709,3 +709,15 @@ pre {
   width: 10px;
   height: 10px;
 }
+
+.facts {
+  margin-top: 6px;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.facts span + span::before {
+  content: "·";
+  margin-right: 8px;
+}
