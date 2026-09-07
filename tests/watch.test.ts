@@ -18,7 +18,10 @@ function fixture(): WatchPaths {
   tmpDirs.push(dir);
   const paths: WatchPaths = {
     claudeDir: path.join(dir, "claude", "projects"),
+    claudeSessionsDir: path.join(dir, "claude", "sessions"),
     codexDir: path.join(dir, "codex", "sessions"),
+    codexHistoryDb: path.join(dir, "codex", "thread_history_1.sqlite"),
+    codexLocksDir: path.join(dir, "codex", "thread-writer-locks"),
     cursorDb: path.join(dir, "cursor", "state.vscdb"),
     spoolDir: path.join(dir, "sidecar", "hooks"),
   };
@@ -26,6 +29,8 @@ function fixture(): WatchPaths {
   fs.mkdirSync(path.join(paths.codexDir, "2026", "09", "06"), { recursive: true });
   fs.mkdirSync(path.dirname(paths.cursorDb), { recursive: true });
   fs.mkdirSync(paths.spoolDir, { recursive: true });
+  fs.mkdirSync(paths.claudeSessionsDir, { recursive: true });
+  fs.mkdirSync(paths.codexLocksDir, { recursive: true });
   return paths;
 }
 
@@ -104,5 +109,10 @@ describe("source watching", () => {
     expect(isRelevantChange("/somewhere/else/s.jsonl", paths)).toBe(false);
     expect(isRelevantChange(path.join(paths.spoolDir, "1-claude-Stop.json"), paths)).toBe(true);
     expect(isRelevantChange(path.join(paths.spoolDir, "1-claude-Stop.tmp"), paths)).toBe(false);
+    // Claude's registry and Codex's lock files flip live state without touching any transcript.
+    expect(isRelevantChange(path.join(paths.claudeSessionsDir, "123.json"), paths)).toBe(true);
+    expect(isRelevantChange(path.join(paths.claudeSessionsDir, "123.key"), paths)).toBe(false);
+    expect(isRelevantChange(path.join(paths.codexLocksDir, "thread.lock"), paths)).toBe(true);
+    expect(isRelevantChange(`${paths.codexHistoryDb}-wal`, paths)).toBe(true);
   });
 });

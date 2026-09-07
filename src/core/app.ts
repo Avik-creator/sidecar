@@ -125,25 +125,31 @@ export class SidecarService implements SidecarApi {
   }
 
   async hooksStatus(): Promise<HookStatus[]> {
-    return readHooksStatus();
+    return this.withLastEvent(readHooksStatus());
   }
 
   // Runs at launch: without hooks Sidecar sees nothing, so it repairs its own wiring.
   async ensureHooks(): Promise<HookStatus[]> {
     if (!readSettings().hooksAutoInstall) {
-      return readHooksStatus();
+      return this.withLastEvent(readHooksStatus());
     }
-    return autoInstallHooks();
+    return this.withLastEvent(autoInstallHooks());
   }
 
   async installHooks(): Promise<HookStatus[]> {
     writeSettings({ hooksAutoInstall: true });
-    return writeHooks();
+    return this.withLastEvent(writeHooks());
   }
 
   // Removing by hand also switches the automatic install off, so it stays removed.
   async uninstallHooks(): Promise<HookStatus[]> {
     writeSettings({ hooksAutoInstall: false });
-    return removeHooks();
+    return this.withLastEvent(removeHooks());
+  }
+
+  // An installed hook that has never produced an event is the failure mode worth showing.
+  private withLastEvent(statuses: HookStatus[]): HookStatus[] {
+    const seen = this.store.lastHookEventAt();
+    return statuses.map((status) => ({ ...status, lastEventAt: seen[status.harness] ?? null }));
   }
 }

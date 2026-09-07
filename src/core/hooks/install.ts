@@ -133,6 +133,7 @@ function inspect(harness: Harness, paths: HookInstallPaths): HookStatus {
     missing,
     foreignEntries,
     note: statusNote(harness, configPath, paths, present.length > 0),
+    lastEventAt: null,
   };
 }
 

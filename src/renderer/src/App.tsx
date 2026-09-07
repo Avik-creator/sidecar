@@ -580,12 +580,17 @@ const SetupView = memo(function SetupView({
               <HarnessMark harness={status.harness} />
               {providerLabel(status.harness)}
             </span>
-            <span className={`status-pill ${status.installed ? "working" : status.detected ? "waiting" : "idle"}`}>
+            <span className={`status-pill ${status.installed && status.lastEventAt ? "working" : status.detected ? "waiting" : "idle"}`}>
               {hookStateLabel(status)}
             </span>
           </div>
           <p className="muted">{shortHomePath(status.configPath)}</p>
           {status.note && <p className="muted hook-note">{status.note}</p>}
+          {status.installed && !status.lastEventAt && (
+            <p className="muted hook-note">
+              No event has arrived yet. Sidecar still reads {providerLabel(status.harness)}&apos;s own session files, so state works without it.
+            </p>
+          )}
         </div>
       ))}
       <div className="row hook-actions">
@@ -721,7 +726,7 @@ function hookStateLabel(status: HookStatus): string {
     return "Not on this Mac";
   }
   if (status.installed) {
-    return "Reporting";
+    return status.lastEventAt ? "Reporting" : "Installed, silent";
   }
   return status.present.length > 0 ? `Missing ${status.missing.length}` : "Not installed";
 }
