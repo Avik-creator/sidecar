@@ -46,6 +46,24 @@ export function codexSessionsDir(): string {
   return path.join(codexRoot(), "sessions");
 }
 
+// One JSON file per running Claude Code process, with its live status.
+export function claudeSessionsDir(): string {
+  return path.join(claudeRoot(), "sessions");
+}
+
+export function codexStateDb(root = codexRoot()): string {
+  return path.join(root, "state_5.sqlite");
+}
+
+export function codexThreadHistoryDb(root = codexRoot()): string {
+  return path.join(root, "thread_history_1.sqlite");
+}
+
+// Codex holds <thread>.lock here while a process has that thread open.
+export function codexThreadLocksDir(root = codexRoot()): string {
+  return path.join(root, "thread-writer-locks");
+}
+
 export function cursorUserDir(): string {
   if (process.platform === "darwin") {
     return path.join(homeDir(), "Library", "Application Support", "Cursor", "User");

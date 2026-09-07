@@ -21,6 +21,7 @@ import {
   sessionIdFromPayload,
 } from "../hooks/events.js";
 import { clearSpool, readSpool } from "../hooks/spool.js";
+import { applyNativeStates, type NativeStateOptions } from "../native/index.js";
 import type { Harness, IngestReport } from "../../shared/types.js";
 
 // Parsed rows are written in batches so one huge transcript never sits in memory whole.
@@ -31,6 +32,7 @@ export interface IngestOptions {
   codexDir?: string;
   cursorDb?: string;
   spoolDir?: string;
+  native?: NativeStateOptions;
 }
 
 export function ingestAll(store: Store, options: IngestOptions = {}): IngestReport {
@@ -185,6 +187,12 @@ export function ingestAll(store: Store, options: IngestOptions = {}): IngestRepo
     });
   }
   clearSpool(spool.files);
+
+  // Native state goes last so it overrides whatever a transcript line left behind.
+  const native = applyNativeStates(store, { ...options.native, cursorDb: options.native?.cursorDb ?? cursorDb });
+  for (const error of native.errors) {
+    console.warn(`native state: ${error}`);
+  }
 
   return {
     filesSeen,

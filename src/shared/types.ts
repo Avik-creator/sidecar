@@ -29,6 +29,9 @@ export type SessionState =
 
 export type TurnRole = "user" | "assistant" | "system" | "tool";
 
+// Where a session's state last came from: a hook event or a harness's own on-disk state.
+export type StateSource = "hook" | "claude-registry" | "codex-db" | "cursor-db";
+
 export type SuggestionStatus =
   | "proposed"
   | "applied"
@@ -57,9 +60,12 @@ export interface SessionRecord {
   parentId: string | null;
   // The subagent's name, such as "Explore" or "general-purpose".
   agentType: string | null;
-  // Timestamp of the last hook event; null means this session has never reported.
+  // Timestamp of the last state report from any source; null means nothing has reported yet.
   hookTs?: string | null;
   hookEvent?: string | null;
+  stateSource?: StateSource | null;
+  // Process id of the agent when its harness publishes one, so a dead process reads as ended.
+  pid?: number | null;
   activity?: string | null;
   lastRole?: TurnRole | null;
 }
@@ -166,6 +172,8 @@ export interface HookStatus {
   missing: string[];
   foreignEntries: number;
   note: string | null;
+  // Last hook event Sidecar received from this harness; null with installed means it never fired.
+  lastEventAt: string | null;
 }
 
 export interface IngestReport {

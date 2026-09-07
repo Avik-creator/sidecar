@@ -68,9 +68,9 @@ function previewApi(): SidecarApi {
 
 function previewHooks(): HookStatus[] {
   return [
-    { harness: "claude", configPath: "/Users/preview/.claude/settings.json", detected: true, installed: true, present: ["Stop"], missing: [], foreignEntries: 2, note: null },
-    { harness: "codex", configPath: "/Users/preview/.codex/hooks.json", detected: true, installed: true, present: ["Stop"], missing: [], foreignEntries: 1, note: "Run /hooks inside Codex and trust the Sidecar entries before they fire." },
-    { harness: "cursor", configPath: "/Users/preview/.cursor/hooks.json", detected: false, installed: false, present: [], missing: ["stop"], foreignEntries: 1, note: null },
+    { harness: "claude", configPath: "/Users/preview/.claude/settings.json", detected: true, installed: true, present: ["Stop"], missing: [], foreignEntries: 2, note: null, lastEventAt: "2026-09-06T08:00:00Z" },
+    { harness: "codex", configPath: "/Users/preview/.codex/hooks.json", detected: true, installed: true, present: ["Stop"], missing: [], foreignEntries: 1, note: "Run /hooks inside Codex and trust the Sidecar entries before they fire.", lastEventAt: null },
+    { harness: "cursor", configPath: "/Users/preview/.cursor/hooks.json", detected: false, installed: false, present: [], missing: ["stop"], foreignEntries: 1, note: null, lastEventAt: "2026-09-06T08:00:00Z" },
   ];
 }
 

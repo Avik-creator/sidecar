@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import chokidar from "chokidar";
 import { SidecarService } from "../core/app.js";
-import { cursorStateDb, hooksSpoolDir } from "../core/paths.js";
 import { IngestWorkerClient } from "./ingest-worker-client.js";
 import { createTrayImage } from "./tray-icon.js";
 import { isRelevantChange, watchPaths, watchRoots } from "./watch-targets.js";
@@ -261,7 +260,15 @@ function pollSources(): void {
 
 function sourceSignature(): string {
   const parts: string[] = [];
-  for (const filePath of [cursorStateDb(), `${cursorStateDb()}-wal`, hooksSpoolDir()]) {
+  const watched = watchPaths();
+  for (const filePath of [
+    watched.cursorDb,
+    `${watched.cursorDb}-wal`,
+    watched.spoolDir,
+    watched.claudeSessionsDir,
+    watched.codexLocksDir,
+    `${watched.codexHistoryDb}-wal`,
+  ]) {
     try {
       const stat = fs.statSync(filePath);
       parts.push(`${stat.size}:${stat.mtimeMs}`);
