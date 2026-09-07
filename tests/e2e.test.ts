@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS } from "../src/core/settings.js";
 import { Store } from "../src/core/db/store.js";
 import { applySuggestion, undoSuggestion, validateTarget } from "../src/core/improve/apply.js";
 import { ingestAll } from "../src/core/ingest/engine.js";
@@ -208,7 +209,7 @@ describe("ingest + improve e2e", () => {
     expect(usage.calendarDays.every((row) => row.tokensIn === 100 && row.tokensOut === 20)).toBe(true);
     expect(usage.totals.usdEstimate).toBeCloseTo(300 / 1_000_000 * 1 + 60 / 1_000_000 * 5, 8);
 
-    const improve = runImprove(store, { improveEnabled: true, improveGlobalRules: true, hooksAutoInstall: true });
+    const improve = runImprove(store, { ...DEFAULT_SETTINGS, improveEnabled: true, improveGlobalRules: true });
     expect(improve.candidates).toBeGreaterThanOrEqual(3);
     expect(improve.promoted).toBeGreaterThanOrEqual(1);
     expect(improve.suggestions).toBeGreaterThanOrEqual(1);

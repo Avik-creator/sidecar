@@ -38,13 +38,21 @@ describe("settings", () => {
 
   it("round-trips a patch without dropping the other keys", () => {
     const file = path.join(tmp(), "settings.json");
-    expect(writeSettings({ improveEnabled: true }, file)).toEqual({
-      improveEnabled: true,
-      improveGlobalRules: false,
-      hooksAutoInstall: true,
-    });
+    expect(writeSettings({ improveEnabled: true }, file)).toEqual({ ...DEFAULT_SETTINGS, improveEnabled: true });
     expect(writeSettings({ improveGlobalRules: true }, file).improveEnabled).toBe(true);
-    expect(readSettings(file)).toEqual({ improveEnabled: true, improveGlobalRules: true, hooksAutoInstall: true });
+    expect(readSettings(file)).toEqual({ ...DEFAULT_SETTINGS, improveEnabled: true, improveGlobalRules: true });
+  });
+
+  it("keeps preferences within what the app can honour", () => {
+    const file = path.join(tmp(), "settings.json");
+    expect(writeSettings({ hotkey: null, quietFrom: "22:00", quietTo: "07:30", quotaAlertPct: 250 }, file)).toMatchObject({
+      hotkey: null,
+      quietFrom: "22:00",
+      quietTo: "07:30",
+      quotaAlertPct: 100,
+    });
+    // A malformed time or a blank hotkey falls back rather than breaking notifications.
+    expect(writeSettings({ quietFrom: "25:99", hotkey: "  " }, file)).toMatchObject({ quietFrom: null, hotkey: "Alt+Shift+S" });
   });
 
   it("falls back to defaults on a corrupt settings file", () => {
@@ -101,9 +109,9 @@ describe("improve gate", () => {
     const store = Store.open(path.join(tmp(), "db.sqlite"));
     seedCorrection(store);
     // The same store with the gate open finds this correction, so zero here is the gate.
-    expect(runImprove(store, { improveEnabled: true, improveGlobalRules: false, hooksAutoInstall: true }).candidates).toBe(1);
+    expect(runImprove(store, { ...DEFAULT_SETTINGS, improveEnabled: true }).candidates).toBe(1);
     store.replaceCandidates([]);
-    const report = runImprove(store, { improveEnabled: false, improveGlobalRules: false, hooksAutoInstall: true });
+    const report = runImprove(store, { ...DEFAULT_SETTINGS });
     expect(report).toEqual({
       candidates: 0,
       clusters: 0,
